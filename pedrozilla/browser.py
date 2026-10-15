@@ -57,6 +57,9 @@ from .webview import WebView
 
 BRAND = "Pedrozilla"
 
+# Icono real del proyecto (un .ico de varios tamaños). Si falta, se dibuja uno.
+_ICON_FILE = Path(__file__).with_name("pedrozilla.ico")
+
 _PERMISSION_LABELS = {
     QWebEnginePermission.PermissionType.MediaAudioCapture: "el micrófono",
     QWebEnginePermission.PermissionType.MediaVideoCapture: "la cámara",
@@ -72,7 +75,16 @@ _PERMISSION_LABELS = {
 
 
 def brand_icon(size: int = 64) -> QIcon:
-    """Icono del navegador dibujado en memoria (sin archivos externos)."""
+    """Icono del navegador: el archivo `pedrozilla.ico` si existe.
+
+    `size` solo se usa en la reserva dibujada de abajo; el .ico trae varios
+    tamaños, así que Qt escala el que más convenga.
+    """
+    if _ICON_FILE.exists():
+        icon = QIcon(str(_ICON_FILE))
+        if not icon.isNull():
+            return icon
+
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
