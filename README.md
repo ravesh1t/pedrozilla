@@ -1,8 +1,6 @@
 # Pedrozilla
 
-Navegador de escritorio con interfaz propia construido sobre **Chromium** mediante
-**Qt WebEngine** (PySide6). No es un envoltorio de otro navegador ni usa servicios
-externos: el motor de renderizado es Chromium, el mismo de Google Chrome.
+Es un navegador basado en Chromium, es basicamente un chrome, pero intento que sea una slop pura y dura que come ram todo el dia
 
 ```
 pedrozilla/                   <- el repositorio
@@ -144,66 +142,13 @@ Si `dist\Pedrozilla\Pedrozilla.exe` existe, `instalar.bat` hace que los accesos
 directos del Escritorio y del menú Inicio apunten a él (así se abre como cualquier
 otro programa, sin pasar por Python).
 
-## Funciones
-
-**Navegación**
-- Barra de direcciones que distingue direcciones de búsquedas (omnibox) con sugerencias
-  basadas en historial y marcadores.
-- Pestañas: crear, cerrar (botón o clic central), mover, duplicar, cerrar las demás,
-  reabrir la última cerrada (`Ctrl+Shift+T`), ciclar con `Ctrl+Tab`.
-- Atrás/adelante, recargar, recargar sin caché, detener, inicio, barra de progreso.
-- `target="_blank"` y `window.open` abren pestañas nuevas; `window.close()` las cierra.
-- Zoom por pestaña y zoom predeterminado configurable.
-- Pantalla completa (`F11`) y soporte de pantalla completa de HTML5 (vídeo).
-- Buscar en la página (`Ctrl+F`) con contador de coincidencias.
-- Páginas internas: `chrome://settings`, `chrome://history`, `chrome://downloads`,
-  `chrome://bookmarks`, `chrome://newtab`, `chrome://devtools`.
-
-**Datos**
-- Historial con búsqueda, borrado por entrada o completo, y autocompletado.
-- Marcadores: estrella, barra de marcadores, renombrar y gestionar.
-- Descargas: elegir carpeta, evitar sobrescrituras, barra inferior con progreso,
-  pausar/reanudar/cancelar, abrir archivo o carpeta, y diálogo con todas las descargas.
-- Ventanas privadas reales (perfil *off-the-record* de Chromium: sin historial, cookies
-  ni caché).
-- Restauración de sesión opcional y memoria del tamaño de la ventana.
-- Guardar página, guardar como PDF e imprimir.
-- Cookies persistentes y compartición de sesión entre ejecuciones.
-
-**Seguridad**
-- Se rechazan los certificados no verificables (con aviso) salvo que se habilite
-  explícitamente en Ajustes → Avanzado.
-- Los permisos de cámara, micrófono, ubicación, notificaciones, etc. siempre se
-  preguntan al usuario.
-- `javascript:` y `data:` escritos en la barra de direcciones se tratan como búsqueda.
-- Diálogo de autenticación HTTP básica.
+# Funciones
 
 **Interfaz**
 - Tema oscuro y claro; menú de aplicación, menú contextual completo (enlaces, imágenes,
   medios, texto seleccionado) y herramientas de desarrollo (`Ctrl+Shift+I`).
 
-## Atajos de teclado
-
-| Atajo | Acción |
-| --- | --- |
-| `Ctrl+T` / `Ctrl+W` | Nueva pestaña / cerrar pestaña |
-| `Ctrl+N` / `Ctrl+Shift+N` | Nueva ventana / ventana privada |
-| `Ctrl+Shift+T` | Reabrir la última pestaña cerrada |
-| `Ctrl+L` / `Alt+D` | Ir a la barra de direcciones |
-| `Ctrl+D` | Guardar o quitar marcador |
-| `Ctrl+Shift+B` | Mostrar u ocultar la barra de marcadores |
-| `Ctrl+H` / `Ctrl+J` | Historial / descargas |
-| `Ctrl+R` / `Ctrl+Shift+R` / `F5` | Recargar / recargar sin caché |
-| `Alt+←` / `Alt+→` | Atrás / adelante |
-| `Ctrl+F` | Buscar en la página |
-| `Ctrl++` / `Ctrl+-` / `Ctrl+0` | Zoom |
-| `Ctrl+Shift+I` | Herramientas de desarrollo |
-| `Ctrl+S` / `Ctrl+Shift+P` | Guardar página / imprimir o PDF |
-| `Ctrl+O` / `Ctrl+U` | Abrir archivo local / ver código fuente |
-| `F11` / `F1` | Pantalla completa / acerca de |
-| `Ctrl+Tab` / `Ctrl+1…8` | Cambiar de pestaña |
-
-## Dónde se guardan los datos
+## Donde se guardan los datos
 
 **Linux** (se respetan `XDG_CONFIG_HOME` y `XDG_DATA_HOME`):
 
