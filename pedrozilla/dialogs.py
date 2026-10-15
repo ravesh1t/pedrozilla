@@ -320,9 +320,11 @@ class SettingsDialog(QDialog):
 
         form.addWidget(QLabel("Tema de la interfaz"))
         self.theme = QComboBox()
+        self.theme.addItem("Clásico (Firefox 7)", "classic")
         self.theme.addItem("Oscuro", "dark")
         self.theme.addItem("Claro", "light")
-        self.theme.setCurrentIndex(max(0, self.theme.findData(self.settings.get("theme"))))
+        theme_val = self.settings.get("theme") or "classic"
+        self.theme.setCurrentIndex(max(0, self.theme.findData(theme_val)))
         form.addWidget(self.theme)
 
         self.show_bookmarks = QCheckBox("Mostrar la barra de marcadores")

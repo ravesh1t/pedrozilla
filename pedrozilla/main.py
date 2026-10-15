@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
     history = History(app)
     bookmarks = Bookmarks(app)
 
-    apply_theme(app, settings.get("theme", "dark"))
+    apply_theme(app, settings.get("theme", "classic"))
 
     context = BrowserContext(settings, history, bookmarks)
     context.build_persistent_profile()

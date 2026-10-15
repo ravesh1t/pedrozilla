@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QSize, QStringListModel, Qt, QUrl, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWebEngineCore import (
     QWebEngineContextMenuRequest,
@@ -100,6 +100,30 @@ def brand_icon(size: int = 64) -> QIcon:
     painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, BRAND[0].upper())
     painter.end()
     return QIcon(pixmap)
+
+
+def close_icon_path() -> str:
+    """Ruta del icono «X» de las pestañas, dibujado una sola vez.
+
+    Se guarda en la carpeta de configuración (no en el repositorio) y se
+    inyecta en la hoja de estilo como `url(...)`. El gris elegido se ve bien
+    tanto sobre pestañas claras (tema clásico) como oscuras.
+    """
+    path = config_dir() / "close.png"
+    if not path.exists():
+        pixmap = QPixmap(12, 12)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor("#7a7a7a"))
+        pen.setWidthF(1.6)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.drawLine(3, 3, 9, 9)
+        painter.drawLine(9, 3, 3, 9)
+        painter.end()
+        pixmap.save(str(path), "PNG")
+    return str(path)
 
 
 def _letter_icon(text: str, color_source: str = "", size: int = 20) -> QIcon:
@@ -224,9 +248,9 @@ class BrowserWindow(QMainWindow):
         self.resize(1280, 840)
         self.setMinimumSize(600, 420)
 
-        self._build_central()
         self._build_toolbar()
         self._build_bookmarks_bar()
+        self._build_central()
         self._build_menus()
         self._build_shortcuts()
         self._build_status_bar()
@@ -245,9 +269,6 @@ class BrowserWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.find_bar = self._make_find_bar()
-        layout.addWidget(self.find_bar)
-
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.tabs.setMovable(True)
@@ -259,7 +280,24 @@ class BrowserWindow(QMainWindow):
         self.tabs.tabBar().customContextMenuRequested.connect(self._show_tab_menu)
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.tabs.currentChanged.connect(self._on_tab_changed)
+
+        # Estilo Firefox 7: la barra de pestañas vive fuera del QTabWidget,
+        # en su propia franja encima de la barra de navegación.
+        self.tab_strip = QWidget()
+        self.tab_strip.setObjectName("TabStrip")
+        strip_layout = QVBoxLayout(self.tab_strip)
+        strip_layout.setContentsMargins(0, 0, 0, 0)
+        strip_layout.addWidget(self.tabs.tabBar())
+        layout.addWidget(self.tab_strip)
+
+        layout.addWidget(self.toolbar)
+        layout.addWidget(self.bookmarks_bar)
+
         layout.addWidget(self.tabs, 1)
+
+        # En Firefox 7 la barra de búsqueda en la página aparece abajo.
+        self.find_bar = self._make_find_bar()
+        layout.addWidget(self.find_bar)
 
         self.downloads_bar = self._make_downloads_bar()
         layout.addWidget(self.downloads_bar)
@@ -343,7 +381,6 @@ class BrowserWindow(QMainWindow):
         self.toolbar.setObjectName("MainToolBar")
         self.toolbar.setMovable(False)
         self.toolbar.setIconSize(QSize(18, 18))
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.toolbar)
 
         self.action_back = self._action("◀", "Atrás (Alt+←)", self.go_back)
         self.action_forward = self._action("▶", "Adelante (Alt+→)", self.go_forward)
@@ -379,8 +416,11 @@ class BrowserWindow(QMainWindow):
         self._downloads_button = self._toolbar_button(self.action_downloads)
         self.toolbar.addWidget(self._downloads_button)
 
-        self.action_menu = self._action("☰", "Menú principal", self._show_main_menu)
+        self.action_menu = self._action(f"{BRAND} ▾", "Menú principal", self._show_main_menu)
         self._menu_button = self._toolbar_button(self.action_menu)
+        self._menu_button.setObjectName("MenuButton")
+        self._menu_button.setAutoRaise(False)
+        self._menu_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.toolbar.addWidget(self._menu_button)
 
     def _action(self, text: str, tooltip: str, slot, shortcut: str | None = None) -> QAction:
@@ -395,8 +435,6 @@ class BrowserWindow(QMainWindow):
         self.bookmarks_bar = QToolBar("Marcadores")
         self.bookmarks_bar.setObjectName("BookmarksBar")
         self.bookmarks_bar.setMovable(False)
-        self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.bookmarks_bar)
         self.bookmarks_bar.setVisible(bool(self.settings.get("show_bookmarks_bar")))
         self._rebuild_bookmarks_bar()
 
@@ -643,7 +681,7 @@ class BrowserWindow(QMainWindow):
         html = new_tab_html(
             search_template=self.settings.search_template,
             engine_key=self.settings.get("search_engine", "duckduckgo"),
-            theme=self.settings.get("theme", "dark"),
+            theme=self.settings.get("theme", "classic"),
             bookmarks=self.bookmarks.items(),
             brand=BRAND,
             footer=(
@@ -1128,7 +1166,7 @@ class BrowserWindow(QMainWindow):
         self.apply_settings(reload_needed=reload_needed)
 
     def apply_settings(self, reload_needed: bool = False) -> None:
-        apply_theme(QApplication.instance(), self.settings.get("theme", "dark"))
+        apply_theme(QApplication.instance(), self.settings.get("theme", "classic"))
         self.ignore_certificate_errors = bool(self.settings.get("ignore_certificate_errors"))
         self.action_show_bookmarks.setChecked(bool(self.settings.get("show_bookmarks_bar")))
         if not self.incognito:
@@ -1587,5 +1625,5 @@ def apply_theme(app: QApplication, theme: str) -> None:
     """Aplica la hoja de estilo a toda la aplicación."""
     from .theme import stylesheet
 
-    app.setStyleSheet(stylesheet(theme))
+    app.setStyleSheet(stylesheet(theme, close_icon_path()))
     app.setProperty("pedrozilla_theme", theme)

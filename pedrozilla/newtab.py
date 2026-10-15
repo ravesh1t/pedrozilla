@@ -152,7 +152,8 @@ def new_tab_html(
 ) -> str:
     """Devuelve el HTML de la página de nueva pestaña."""
     engine_name = SEARCH_ENGINES.get(engine_key, ("la web", ""))[0]
-    template = _TEMPLATE_LIGHT if (theme or "").lower() == "light" else _TEMPLATE_DARK
+    theme = (theme or "").lower()
+    template = _TEMPLATE_LIGHT if theme in ("light", "classic") else _TEMPLATE_DARK
 
     greeting_pool = ("Hola", "Bienvenido", "Listo para navegar")
     greeting = greeting_pool[len(bookmarks or []) % len(greeting_pool)]

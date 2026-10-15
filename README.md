@@ -18,7 +18,7 @@ pedrozilla/                   <- el repositorio
     ├── downloads.py         descargas: seguimiento, barra inferior y diálogo
     ├── dialogs.py           historial, marcadores, ajustes y "acerca de"
     ├── newtab.py            HTML de la página de nueva pestaña
-    ├── theme.py             hojas de estilo (tema oscuro y claro)
+    ├── theme.py             hojas de estilo (tema clásico tipo Firefox 7, oscuro y claro)
     ├── utils.py             parseo de la barra de direcciones y formateo
     ├── instalar.sh          icono + menú de aplicaciones + comando "pedrozilla"  (Linux)
     ├── instalar.bat/.ps1    icono + accesos directos  (Windows)
@@ -145,7 +145,9 @@ otro programa, sin pasar por Python).
 # Funciones
 
 **Interfaz**
-- Tema oscuro y claro; menú de aplicación, menú contextual completo (enlaces, imágenes,
+- Aspecto **clásico tipo Firefox 7** (pestañas arriba, botón naranja de menú y una sola
+  barra de direcciones, sin caja de búsqueda aparte); también hay temas oscuro y claro.
+  Menú de aplicación, menú contextual completo (enlaces, imágenes,
   medios, texto seleccionado) y herramientas de desarrollo (`Ctrl+Shift+I`).
 
 ## Donde se guardan los datos

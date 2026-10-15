@@ -35,7 +35,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "download_dir": "",
     "ask_download_dir": False,
     "show_bookmarks_bar": True,
-    "theme": "dark",  # dark | light
+    "theme": "classic",  # classic | dark | light
     "default_zoom": 1.0,
     "user_agent": "",
     "javascript": True,
