@@ -1,0 +1,6 @@
+# Los scripts de Windows deben conservar finales de linea CRLF;
+# los de Linux, LF. Asi git no los rompe al clonar.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.sh  text eol=lf
+*.patch text eol=lf
