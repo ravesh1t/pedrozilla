@@ -1537,7 +1537,7 @@ class BrowserWindow(QMainWindow):
 
     def show_about(self) -> None:
         info = {
-            "Versión": "1.0",
+            "Versión": "1.0.1",
             "Motor": f"Chromium {self.context.chromium_version} (Qt WebEngine)",
             "Perfil": "incógnito (no se guarda nada)" if self.incognito else str(config_dir()),
             "Descargas": str(self.settings.download_path),
