@@ -1,4 +1,4 @@
-﻿# Pedrozilla
+# Pedrozilla
 
 > **1.0.2**: vuelta a la base Chromium (Qt WebEngine). La etapa Firefox queda
 > archivada en `firefox/` (distribución por perfil 2.0) y el intento de fork
@@ -145,6 +145,19 @@ aplicaci├│n incluye una copia del navegador en el momento de crearla.
 Si `dist\Pedrozilla\Pedrozilla.exe` existe, `instalar.bat` hace que los accesos
 directos del Escritorio y del men├║ Inicio apunten a ├®l (as├¡ se abre como cualquier
 otro programa, sin pasar por Python).
+
+## Instalador para otros PCs (sin Python)
+
+Si quieres pasárselo a alguien que no tiene (o no quiere) Python:
+
+```bat
+crear_setup.bat
+```
+
+Genera `dist\PedrozillaSetup-1.0.2.exe`: un único archivo que instala
+Pedrozilla en `%LOCALAPPDATA%\Pedrozilla`, crea los accesos directos y lo
+registra para desinstalarlo desde *Configuración → Aplicaciones*.
+No pide Python ni administrador. Pásale ese `.exe` a tu amigo y listo.
 
 # Funciones
 
