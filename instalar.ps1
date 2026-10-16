@@ -8,7 +8,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$ProjectDir = Split-Path -Parent $PSScriptRoot
+$ProjectDir = $PSScriptRoot
 $DisplayName = "Pedrozilla"
 $IconPath = Join-Path $ProjectDir "assets\pedrozilla.ico"
 $base = $env:APPDATA
