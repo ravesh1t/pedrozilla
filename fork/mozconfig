@@ -8,8 +8,7 @@
 #   4. ./mach build   (desde MozillaBuild shell)
 
 ac_add_options --enable-application=browser
-ac_add_options --target=x86_64-pc-mingw32
-ac_add_options --host=x86_64-pc-mingw32
+# (host/target se autodetectan: x86_64-pc-windows-msvc en este equipo)
 
 # Marca propia (directorio fork/branding/pedrozilla copiado al fuente).
 ac_add_options --with-branding=browser/branding/pedrozilla
@@ -20,10 +19,10 @@ ac_add_options --with-branding=browser/branding/pedrozilla
 ac_add_options --with-app-basename=Pedrozilla
 ac_add_options --with-app-name=pedrozilla
 
-# Identidad propia: proveedor y ID de aplicacion (informe de fallos, Sync,
-# formato de perfil). El ID es un UUID generado para Pedrozilla.
+# Identidad propia: proveedor Pedrozilla. El ID de aplicacion se conserva
+# (MOZ_APP_ID solo acepta el valor implicado del fuente; cambiarlo exige
+# parchear browser/moz.configure, queda como mejora futura).
 export MOZ_APP_VENDOR=Pedrozilla
-export MOZ_APP_ID={a3f2c1e0-5b4d-4a8e-9c0d-1e2f3a4b5c6d}
 
 # Compilacion fuera del arbol de fuentes.
 mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-pedrozilla
