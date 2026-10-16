@@ -38,8 +38,11 @@ if (-not $firefox) {
 Write-Host "   $firefox"
 
 Write-Host "==> Preparando perfil"
-& (Join-Path $ProjectDir "tools\init-profile.ps1") -ProfileDir $ProfileDir | Out-Null
-if ($LASTEXITCODE -ne 0) { exit 1 }
+try {
+    & (Join-Path $ProjectDir "tools\init-profile.ps1") -ProfileDir $ProfileDir | Out-Null
+} catch {
+    exit 1
+}
 
 Write-Host "==> Migrando marcadores de Pedrozilla 1.x (si existen)"
 & (Join-Path $ProjectDir "tools\migrate-1x.ps1") -ProfileDir $ProfileDir
