@@ -1,13 +1,4 @@
-# Perfil local de pruebas (no se sube)
-firefox-profile-test/
-
-# Codigo heredado 1.x (Python/Qt, solo se toca para consulta)
-legacy/pedrozilla-qt/libs/
-legacy/pedrozilla-qt/ui_nueva_pestana.png
-legacy/pedrozilla-qt/ui_pagina.png
-legacy/pedrozilla-qt/__pycache__/
-
-# Python en general
+﻿# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -15,10 +6,17 @@ __pycache__/
 venv/
 env/
 
-# Restos de empaquetado del codigo heredado
+# PyInstaller
 build/
 dist/
 *.spec
+
+# Libreria auxiliar de X11: la descarga instalar.sh sola (solo Linux)
+pedrozilla/libs/
+
+# Capturas antiguas que todavia no se usan en el README
+pedrozilla/ui_nueva_pestana.png
+pedrozilla/ui_pagina.png
 
 # Sistema
 Thumbs.db
