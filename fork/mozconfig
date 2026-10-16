@@ -19,10 +19,9 @@ ac_add_options --with-branding=browser/branding/pedrozilla
 ac_add_options --with-app-basename=Pedrozilla
 ac_add_options --with-app-name=pedrozilla
 
-# Identidad propia: proveedor Pedrozilla. El ID de aplicacion se conserva
-# (MOZ_APP_ID solo acepta el valor implicado del fuente; cambiarlo exige
-# parchear browser/moz.configure, queda como mejora futura).
-export MOZ_APP_VENDOR=Pedrozilla
+# Identidad propia: proveedor y ID de aplicacion. Ni mozconfig ni entorno
+# sirven (configure solo acepta origen "implied"): se fijan con el parche
+# fork/patches/branding-vendor-id.patch sobre browser/moz.configure.
 
 # Compilacion fuera del arbol de fuentes.
 mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-pedrozilla
