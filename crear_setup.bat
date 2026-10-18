@@ -1,5 +1,5 @@
 @echo off
-rem Crea el instalador dist\PedrozillaSetup-1.0.2.exe (un solo archivo).
+rem Crea el instalador dist\PedrozillaSetup-1.1.0.exe (un solo archivo).
 rem 1) Genera dist\Pedrozilla\ con crear_exe.bat (necesita Python una vez).
 rem 2) Lo empaqueta con NSIS (makensis en PATH o en %LOCALAPPDATA%\scoop).
 rem El instalador resultante NO necesita Python ni admin para usarse.
@@ -46,6 +46,6 @@ if errorlevel 1 (
 )
 
 echo.
-echo Listo: "%DIR%dist\PedrozillaSetup-1.0.2.exe"
+echo Listo: "%DIR%dist\PedrozillaSetup-1.1.0.exe"
 popd
 exit /b 0

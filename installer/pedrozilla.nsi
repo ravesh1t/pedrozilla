@@ -6,16 +6,16 @@
 !include "MUI2.nsh"
 
 Name "Pedrozilla"
-OutFile "${__FILEDIR__}\..\dist\PedrozillaSetup-1.0.2.exe"
+OutFile "${__FILEDIR__}\..\dist\PedrozillaSetup-1.1.0.exe"
 InstallDir "$LOCALAPPDATA\Pedrozilla"
 RequestExecutionLevel user
 Icon "${__FILEDIR__}\..\pedrozilla\pedrozilla.ico"
 UninstallIcon "${__FILEDIR__}\..\pedrozilla\pedrozilla.ico"
 
-VIProductVersion "1.0.2.0"
+VIProductVersion "1.1.0.0"
 VIAddVersionKey "ProductName" "Pedrozilla"
-VIAddVersionKey "FileVersion" "1.0.2"
-VIAddVersionKey "ProductVersion" "1.0.2"
+VIAddVersionKey "FileVersion" "1.1.0"
+VIAddVersionKey "ProductVersion" "1.1.0"
 VIAddVersionKey "CompanyName" "Pedrozilla"
 VIAddVersionKey "LegalCopyright" "Pedrozilla (MIT)"
 VIAddVersionKey "FileDescription" "Instalador de Pedrozilla"
@@ -40,7 +40,7 @@ Section "Pedrozilla" SecMain
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Pedrozilla" "DisplayName" "Pedrozilla"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Pedrozilla" "DisplayVersion" "1.0.2"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Pedrozilla" "DisplayVersion" "1.1.0"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Pedrozilla" "Publisher" "Pedrozilla"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Pedrozilla" "UninstallString" "$INSTDIR\Uninstall.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Pedrozilla" "InstallLocation" "$INSTDIR"
