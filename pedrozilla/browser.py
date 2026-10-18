@@ -2,16 +2,28 @@
 
 from __future__ import annotations
 
+import shutil
+import sys
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QSize, QStringListModel, Qt, QUrl, Signal
+from PySide6.QtCore import (
+    QCoreApplication,
+    QEvent,
+    QSize,
+    QStandardPaths,
+    QStringListModel,
+    Qt,
+    QUrl,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
+from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import (
     QWebEngineContextMenuRequest,
     QWebEngineDownloadRequest,
     QWebEnginePage,
-    QWebEnginePermission,
     QWebEngineProfile,
     QWebEngineSettings,
 )
@@ -41,8 +53,10 @@ from PySide6.QtWidgets import (
 
 from .dialogs import AboutDialog, BookmarksDialog, HistoryDialog, SettingsDialog
 from .downloads import DownloadRow, DownloadsDialog, DownloadsManager
+from .extensions import ExtensionBridge, ExtensionsDialog, extension_manager
 from .newtab import new_tab_html
-from .storage import Bookmarks, History, Session, Settings, config_dir, data_dir
+from .newtab_bridge import NewTabBridge
+from .storage import Bookmarks, History, Session, Settings, Shortcuts, config_dir, data_dir
 from .utils import (
     color_for,
     decorate_user_agent,
@@ -60,18 +74,24 @@ BRAND = "Pedrozilla"
 # Icono real del proyecto (un .ico de varios tamaños). Si falta, se dibuja uno.
 _ICON_FILE = Path(__file__).with_name("pedrozilla.ico")
 
-_PERMISSION_LABELS = {
-    QWebEnginePermission.PermissionType.MediaAudioCapture: "el micrófono",
-    QWebEnginePermission.PermissionType.MediaVideoCapture: "la cámara",
-    QWebEnginePermission.PermissionType.MediaAudioVideoCapture: "la cámara y el micrófono",
-    QWebEnginePermission.PermissionType.DesktopVideoCapture: "capturar la pantalla",
-    QWebEnginePermission.PermissionType.DesktopAudioVideoCapture: "capturar pantalla y audio",
-    QWebEnginePermission.PermissionType.Geolocation: "tu ubicación",
-    QWebEnginePermission.PermissionType.Notifications: "enviar notificaciones",
-    QWebEnginePermission.PermissionType.ClipboardReadWrite: "el portapapeles",
-    QWebEnginePermission.PermissionType.MouseLock: "bloquear el puntero",
-    QWebEnginePermission.PermissionType.LocalFontsAccess: "las fuentes locales",
-}
+_PERMISSION_LABELS = {}
+try:
+    from PySide6.QtWebEngineCore import QWebEnginePermission
+
+    _PERMISSION_LABELS = {
+        QWebEnginePermission.PermissionType.MediaAudioCapture: "el micrófono",
+        QWebEnginePermission.PermissionType.MediaVideoCapture: "la cámara",
+        QWebEnginePermission.PermissionType.MediaAudioVideoCapture: "la cámara y el micrófono",
+        QWebEnginePermission.PermissionType.DesktopVideoCapture: "capturar la pantalla",
+        QWebEnginePermission.PermissionType.DesktopAudioVideoCapture: "capturar pantalla y audio",
+        QWebEnginePermission.PermissionType.Geolocation: "tu ubicación",
+        QWebEnginePermission.PermissionType.Notifications: "enviar notificaciones",
+        QWebEnginePermission.PermissionType.ClipboardReadWrite: "el portapapeles",
+        QWebEnginePermission.PermissionType.MouseLock: "bloquear el puntero",
+        QWebEnginePermission.PermissionType.LocalFontsAccess: "las fuentes locales",
+    }
+except Exception:
+    _PERMISSION_LABELS = {}
 
 
 def brand_icon(size: int = 64) -> QIcon:
@@ -151,6 +171,7 @@ class BrowserContext:
         self.settings = settings
         self.history = history
         self.bookmarks = bookmarks
+        self.shortcuts = Shortcuts()
         self.downloads = DownloadsManager(settings)
         self.session = Session()
         self.windows: list[BrowserWindow] = []
@@ -158,22 +179,69 @@ class BrowserContext:
         self.default_user_agent = ""
         self.chromium_version = "desconocida"
         self.persistent_profile: QWebEngineProfile | None = None
+        # Puente de extensiones (gestor Qt + estado activo persistido).
+        self.extensions: ExtensionBridge | None = None
         self._attached_profiles: set[int] = set()
 
     # -- perfiles -----------------------------------------------------------
     def build_persistent_profile(self) -> QWebEngineProfile:
+        from PySide6.QtWebEngineCore import QWebEngineProfile
+
         data_root = data_dir()
-        # El "perfil por defecto" de Qt WebEngine debe tener rutas propias: si no,
-        # Qt crea su carpeta QtWebEngine (~/.local/share/<Org>/<App> en Linux,
-        # %LOCALAPPDATA%\<Org>\<App> en Windows) fuera de nuestro directorio.
+        # Qt 6.12 (comprobado empíricamente): llamar a setPersistentStoragePath()
+        # con una ruta DISTINTA de la que Qt calcula por defecto deja el gestor de
+        # extensiones incoherente — setExtensionEnabled() muere con un access
+        # violation y installExtension() no persiste (la extensión aparece como
+        # "cargada en temporal" sin estar instalada). Por eso NO se sobrescribe la
+        # ruta de almacenamiento: la de Qt, fijada con org/app = Pedrozilla
+        # (main.py), cae dentro de %APPDATA%\Pedrozilla\... (carpeta nuestra) y es
+        # la única con la que el gestor de extensiones funciona. La caché no
+        # participa en ese sistema y sí se redirige a LOCALAPPDATA (verificado).
         default_profile = QWebEngineProfile.defaultProfile()
-        default_profile.setPersistentStoragePath(str(data_root / "default-profile"))
         default_profile.setCachePath(str(data_root / "default-cache"))
         self.default_user_agent = default_profile.httpUserAgent()
         self.chromium_version = self._chromium_from_ua(self.default_user_agent)
 
+        # Ruta por defecto que usará Qt para nuestro perfil con nombre:
+        # AppDataLocation/QtWebEngine/<storageName>. Es la misma que reporta
+        # QWebEngineProfile.persistentStoragePath() sin override (comprobado:
+        # coincide con installPath() del gestor de extensiones). Se calcula sin
+        # crear un perfil temporal, porque abrir uno dejaría archivos en la ruta
+        # destino y bloquearía la migración posterior.
+        destino = (
+            Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation))
+            / "QtWebEngine"
+            / "pedrozilla"
+        )
+
+        # Migración única: los builds antiguos guardaban el perfil con datos del
+        # usuario (cookies, sesiones) en LOCALAPPDATA\pedrozilla\profile; se
+        # traslada a la ubicación nueva cuando esta aún no contiene datos (si el
+        # destino ya tiene un perfil real, jamás se pisa). Cookies/History marcan
+        # un perfil "con datos"; un destino sin ellos es andamiaje (p. ej. de
+        # pruebas) y se reemplaza. Solo en producción (org/app fijados): los
+        # scripts de prueba no fijan org/app y no deben arrastrar los datos
+        # reales a su ruta por defecto de desarrollo.
+        origen = data_root / "profile"
+        origen_datos = (origen / "Cookies").exists() or (origen / "History").exists()
+        destino_datos = (destino / "Cookies").exists() or (destino / "History").exists()
+        if (
+            QCoreApplication.organizationName()
+            and QCoreApplication.applicationName()
+            and origen_datos
+            and not destino_datos
+        ):
+            try:
+                if destino.exists():
+                    shutil.rmtree(destino)  # andamiaje sin datos reales
+                destino.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(origen), str(destino))
+            except OSError as exc:
+                # Nunca se bloquea el arranque: se continúa con perfil nuevo,
+                # pero se deja constancia del fallo para poder diagnosticarlo.
+                print(f"[pedrozilla] no se pudo migrar el perfil antiguo: {exc}", file=sys.stderr)
+
         profile = QWebEngineProfile("pedrozilla", QApplication.instance())
-        profile.setPersistentStoragePath(str(data_root / "profile"))
         profile.setCachePath(str(data_root / "cache"))
         profile.setPersistentCookiesPolicy(
             QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies
@@ -182,6 +250,13 @@ class BrowserContext:
         self.persistent_profile = profile
         self.configure_profile(default_profile)
         self.configure_profile(profile)
+
+        # Extensiones Chromium (MV3): el puente restaura las que el usuario
+        # tenía activas; si el perfil no las soporta (o no hay), queda en None.
+        manager = extension_manager(profile)
+        if manager is not None:
+            self.extensions = ExtensionBridge(manager, self.settings)
+            self.extensions.restore()
         return profile
 
     @staticmethod
@@ -238,6 +313,8 @@ class BrowserWindow(QMainWindow):
         self.incognito = incognito
         self.ignore_certificate_errors = bool(self.settings.get("ignore_certificate_errors"))
         self.debug_console = False
+        # Marcador pedido por el usuario mientras la pestaña aún cargaba.
+        self._pending_bookmark: WebView | None = None
 
         self._devtools_view: QWebEngineView | None = None
         self._devtools_page: QWebEnginePage | None = None
@@ -285,9 +362,22 @@ class BrowserWindow(QMainWindow):
         # en su propia franja encima de la barra de navegación.
         self.tab_strip = QWidget()
         self.tab_strip.setObjectName("TabStrip")
-        strip_layout = QVBoxLayout(self.tab_strip)
+        strip_layout = QHBoxLayout(self.tab_strip)
         strip_layout.setContentsMargins(0, 0, 0, 0)
-        strip_layout.addWidget(self.tabs.tabBar())
+        strip_layout.setSpacing(0)
+        strip_layout.addWidget(self.tabs.tabBar(), 1)
+
+        # Botón "+" al final de la franja para crear pestañas (como Firefox).
+        self.new_tab_button = QToolButton()
+        self.new_tab_button.setObjectName("NewTabButton")
+        self.new_tab_button.setText("+")
+        self.new_tab_button.setToolTip("Nueva pestaña (Ctrl+T)")
+        self.new_tab_button.setAutoRaise(True)
+        self.new_tab_button.setFixedSize(34, 28)
+        self.new_tab_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.new_tab_button.clicked.connect(self.new_tab_focused)
+        strip_layout.addWidget(self.new_tab_button)
+
         layout.addWidget(self.tab_strip)
 
         layout.addWidget(self.toolbar)
@@ -538,7 +628,9 @@ class BrowserWindow(QMainWindow):
         self._add(bookmarks_menu, "Mostrar todos los marcadores", self.show_bookmarks_manager, "Ctrl+Shift+O")
 
         self._add(self._menu("&Descargas"), "Mostrar descargas", self.show_downloads, "Ctrl+J")
-        self._add(self._menu("&Ajustes"), "Preferencias…", self.show_settings, "Ctrl+,")
+        settings_menu = self._menu("&Ajustes")
+        self._add(settings_menu, "Preferencias…", self.show_settings, "Ctrl+,")
+        self._add(settings_menu, "Extensiones…", self.show_extensions, "Ctrl+Shift+E")
         self._add(self._menu("A&yuda"), f"Acerca de {BRAND}", self.show_about, "F1")
 
     def _build_shortcuts(self) -> None:
@@ -661,6 +753,15 @@ class BrowserWindow(QMainWindow):
             lambda status, code, v=view: self._on_render_terminated(v, status, code)
         )
 
+        # Bridge para nueva pestaña
+        try:
+            self._bridge = NewTabBridge(self.context)
+            self._channel = QWebChannel(page)
+            self._channel.registerObject('pedrozilla', self._bridge)
+            page.setWebChannel(self._channel)
+        except Exception:
+            pass
+
     def _apply_page_settings(self, page: QWebEnginePage) -> None:
         settings = page.settings()
         attribute = QWebEngineSettings.WebAttribute
@@ -683,11 +784,14 @@ class BrowserWindow(QMainWindow):
             engine_key=self.settings.get("search_engine", "duckduckgo"),
             theme=self.settings.get("theme", "classic"),
             bookmarks=self.bookmarks.items(),
+            shortcuts=self.context.shortcuts.items(),
+            history=self.history.entries(),
+            accent=self.settings.get("accent", "#8ab4f8"),
             brand=BRAND,
             footer=(
                 "Ventana privada: no se guarda historial, cookies ni caché"
                 if self.incognito
-                else "Navegador basado en Chromium · Qt WebEngine"
+                else ""
             ),
         )
         view.load_html_page(html)
@@ -836,6 +940,13 @@ class BrowserWindow(QMainWindow):
             url = view.url_string()
             if is_web_url(url):
                 self.history.add(view.title(), url)
+
+        # Marcador pedido por el usuario mientras cargaba: ahora sí, con la
+        # URL y el título definitivos (las redirecciones ya no lo rompen).
+        if getattr(self, "_pending_bookmark", None) is view:
+            self._pending_bookmark = None
+            if ok:
+                self._apply_bookmark_toggle(view)
 
     def _on_status_hint(self, message: str, _timeout: int) -> None:
         self.statusBar().showMessage(display_url(message, 90) if message else "Listo", 0 if message else 1500)
@@ -1059,9 +1170,24 @@ class BrowserWindow(QMainWindow):
         if not url or url == "about:blank" or view.is_new_tab_page:
             self.statusBar().showMessage("Esta página no se puede marcar", 3000)
             return
-        added = self.bookmarks.toggle(view.title(), url)
+        # Si la página aún carga, esperamos al final: las redirecciones cambian
+        # la URL y el título, y guardar antes deja marcadores "rotos"
+        # (la estrella se vacía nada más cargar).
+        if view.is_loading:
+            self._pending_bookmark = view
+            self.statusBar().showMessage("Guardando el marcador al terminar de cargar…", 3500)
+            return
+        self._apply_bookmark_toggle(view)
+
+    def _apply_bookmark_toggle(self, view: WebView) -> None:
+        """Guarda/quita el marcador con la URL y el título definitivos."""
+        url = view.url_string()
+        title = view.title().strip() or host_of(url) or url
+        added = self.bookmarks.toggle(title, url)
         self._update_star(view)
-        self.statusBar().showMessage("Marcador guardado" if added else "Marcador eliminado", 2500)
+        self.statusBar().showMessage(
+            "Marcador guardado" if added else "Marcador eliminado", 2500
+        )
 
     def _rebuild_bookmarks_bar(self) -> None:
         self.bookmarks_bar.clear()
@@ -1164,6 +1290,21 @@ class BrowserWindow(QMainWindow):
         )
         self.settings.update(values)
         self.apply_settings(reload_needed=reload_needed)
+
+    def show_extensions(self) -> None:
+        """Abre el gestor de extensiones (solo perfiles persistentes)."""
+        if self.context.extensions is None:
+            QMessageBox.information(
+                self,
+                "Extensiones",
+                "Las extensiones no están disponibles en este perfil "
+                "(las ventanas privadas no las admiten).",
+            )
+            return
+        manager = extension_manager(self.profile)
+        if manager is None:
+            manager = self.context.extensions.manager
+        ExtensionsDialog(manager, self.context.extensions, self).exec()
 
     def apply_settings(self, reload_needed: bool = False) -> None:
         apply_theme(QApplication.instance(), self.settings.get("theme", "classic"))
@@ -1578,8 +1719,14 @@ class BrowserWindow(QMainWindow):
 
         if omnibox is not None and obj is omnibox:
             if event.type() == QEvent.Type.FocusIn:
-                self._refresh_completions()
-                self.omnibox.selectAll()
+                # El popup del autocompletado roba y devuelve el foco mientras
+                # el usuario escribe (PopupFocusReason). En ese caso NO hay que
+                # seleccionar todo: se borraría lo tecleado y cada pulsación
+                # empezaría de cero. Solo seleccionamos al entrar de fuera
+                # (clic, Ctrl+T, nueva pestaña, cambio de ventana...).
+                if event.reason() != Qt.FocusReason.PopupFocusReason:
+                    self._refresh_completions()
+                    self.omnibox.selectAll()
             elif event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
                 view = self.current_view()
                 self.omnibox.clearFocus()

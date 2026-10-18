@@ -14,6 +14,8 @@ from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
+from .utils import canonical_url
+
 APP_NAME = "Pedrozilla"
 APP_DIR_NAME = "pedrozilla"
 HISTORY_LIMIT = 8000
@@ -40,6 +42,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "user_agent": "",
     "javascript": True,
     "ignore_certificate_errors": False,
+    # IDs de extensiones que el usuario dejó activas (las instaladas en el
+    # perfil las recarga Qt en cada arranque, pero siempre desactivadas).
+    "enabled_extensions": [],
 }
 
 
@@ -224,7 +229,12 @@ class History(QObject):
 
 
 class Bookmarks(QObject):
-    """Marcadores: lista plana de {title, url, added}."""
+    """Marcadores: lista plana de {title, url, added}.
+
+    Las URLs se comparan por su forma canónica: «https://x.com» y
+    «https://x.com/» son el mismo sitio y no deben duplicarse, y la estrella
+    de la barra se mantiene aunque la página redirija la barra final.
+    """
 
     changed = Signal()
 
@@ -232,12 +242,31 @@ class Bookmarks(QObject):
         super().__init__(parent)
         self._file = _JsonFile(config_dir() / "bookmarks.json", [])
         self._items: list[dict[str, Any]] = self._file.data
+        # Limpia duplicados heredados (mismo sitio con/without barra final).
+        if self._dedupe():
+            self._persist()
 
     def items(self) -> list[dict[str, Any]]:
         return list(self._items)
 
+    def _dedupe(self) -> bool:
+        seen: set[str] = set()
+        kept: list[dict[str, Any]] = []
+        changed = False
+        for item in self._items:
+            key = canonical_url(str(item.get("url", "")))
+            if key in seen:
+                changed = True
+                continue
+            seen.add(key)
+            kept.append(item)
+        if changed:
+            self._items = kept
+        return changed
+
     def contains(self, url: str) -> bool:
-        return any(item.get("url") == url for item in self._items)
+        key = canonical_url(url)
+        return any(canonical_url(str(item.get("url", ""))) == key for item in self._items)
 
     def add(self, title: str, url: str) -> bool:
         if not url or self.contains(url):
@@ -253,17 +282,23 @@ class Bookmarks(QObject):
         return True
 
     def remove(self, url: str) -> bool:
+        key = canonical_url(url)
         before = len(self._items)
-        self._items = [item for item in self._items if item.get("url") != url]
+        self._items = [
+            item
+            for item in self._items
+            if canonical_url(str(item.get("url", ""))) != key
+        ]
         if len(self._items) == before:
             return False
         self._persist()
         return True
 
     def rename(self, url: str, title: str) -> None:
+        key = canonical_url(url)
         for item in self._items:
-            if item.get("url") == url:
-                item["title"] = (title or "").strip() or url
+            if canonical_url(str(item.get("url", ""))) == key:
+                item["title"] = (title or "").strip() or str(item.get("url", ""))
                 self._persist()
                 return
 
@@ -273,6 +308,65 @@ class Bookmarks(QObject):
             self.remove(url)
             return False
         return self.add(title, url)
+
+    def _persist(self) -> None:
+        self._file.data = self._items
+        self._file.save()
+        self.changed.emit()
+
+
+class Shortcuts(QObject):
+    """Accesos rápidos de la nueva pestaña: lista ordenada {title, url, favicon?}."""
+
+    changed = Signal()
+
+    DEFAULT_SHORTCUTS: list[dict[str, Any]] = [
+        {"title": "YouTube", "url": "https://www.youtube.com/"},
+        {"title": "Wikipedia", "url": "https://es.wikipedia.org/"},
+        {"title": "GitHub", "url": "https://github.com/"},
+        {"title": "Gmail", "url": "https://mail.google.com/"},
+        {"title": "Google Maps", "url": "https://www.google.com/maps"},
+        {"title": "DuckDuckGo", "url": "https://duckduckgo.com/"},
+    ]
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._file = _JsonFile(config_dir() / "shortcuts.json", [])
+        self._items: list[dict[str, Any]] = self._file.data
+        if not self._items:
+            self._items = [dict(i) for i in self.DEFAULT_SHORTCUTS]
+            self._persist()
+
+    def items(self) -> list[dict[str, Any]]:
+        return list(self._items)
+
+    def add(self, title: str, url: str) -> bool:
+        url = (url or "").strip()
+        if not url:
+            return False
+        title = (title or "").strip() or url
+        if any(i.get("url") == url for i in self._items):
+            return False
+        self._items.append({"title": title, "url": url})
+        self._persist()
+        return True
+
+    def remove(self, url: str) -> bool:
+        before = len(self._items)
+        self._items = [i for i in self._items if i.get("url") != url]
+        changed = len(self._items) != before
+        if changed:
+            self._persist()
+        return changed
+
+    def reorder(self, urls: list[str]) -> None:
+        order = {u: idx for idx, u in enumerate(urls)}
+        self._items.sort(key=lambda x: order.get(x.get("url", ""), 9999))
+        self._persist()
+
+    def reset_defaults(self) -> None:
+        self._items = [dict(i) for i in self.DEFAULT_SHORTCUTS]
+        self._persist()
 
     def _persist(self) -> None:
         self._file.data = self._items

@@ -81,6 +81,36 @@ def host_of(url: str) -> str:
         return ""
 
 
+def canonical_url(url: str) -> str:
+    """URL canónica para comparar identidad de página (marcadores, duplicados).
+
+    Unifica lo que no cambia el recurso real: mayúsculas en esquema y host,
+    puerto por defecto (80/443) y la barra final de la raíz
+    («https://ejemplo.com» == «https://ejemplo.com/»). Conserva ruta,
+    consulta y fragmento, que sí identifican contenido distinto.
+    """
+    url = (url or "").strip()
+    if not url:
+        return ""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    scheme = parts.scheme.lower()
+    netloc = parts.netloc.lower()
+    if scheme in ("http", "https"):
+        if scheme == "http" and netloc.endswith(":80"):
+            netloc = netloc[:-3]
+        elif scheme == "https" and netloc.endswith(":443"):
+            netloc = netloc[:-4]
+    path = parts.path
+    if path == "/":
+        path = ""
+    return f"{scheme}://{netloc}{path}" + (f"?{parts.query}" if parts.query else "") + (
+        f"#{parts.fragment}" if parts.fragment else ""
+    )
+
+
 def is_web_url(url: str) -> bool:
     try:
         return urlsplit(url).scheme in ("http", "https")

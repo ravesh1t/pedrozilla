@@ -1,8 +1,7 @@
 # Pedrozilla
 
-> **1.0.2**: vuelta a la base Chromium (Qt WebEngine). La etapa Firefox queda
-> archivada en `firefox/` (distribución por perfil 2.0) y el intento de fork
-> compilado en `firefox/fork/`.
+> **1.1.0**: extensiones Chromium (MV3) y limpieza del repo. La etapa Firefox
+> vive en la rama `firefox-concept`.
 
 Es un navegador basado en Chromium, es basicamente un chrome, pero intento que sea una slop pura y dura que come ram todo el dia
 
@@ -154,7 +153,7 @@ Si quieres pasárselo a alguien que no tiene (o no quiere) Python:
 crear_setup.bat
 ```
 
-Genera `dist\PedrozillaSetup-1.0.2.exe`: un único archivo que instala
+Genera `dist\PedrozillaSetup-1.1.0.exe`: un único archivo que instala
 Pedrozilla en `%LOCALAPPDATA%\Pedrozilla`, crea los accesos directos y lo
 registra para desinstalarlo desde *Configuración → Aplicaciones*.
 No pide Python ni administrador. Pásale ese `.exe` a tu amigo y listo.

@@ -10,6 +10,8 @@ env/
 build/
 dist/
 *.spec
+_internal/
+*.exe
 
 # Libreria auxiliar de X11: la descarga instalar.sh sola (solo Linux)
 pedrozilla/libs/

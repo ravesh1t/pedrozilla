@@ -37,7 +37,8 @@ if not defined NSIS (
 )
 
 echo ==^> Creando instalador con "%NSIS%"
-"%NSIS%" installer\pedrozilla.nsi
+rem Ruta absoluta: con ruta relativa ${__FILEDIR__} resuelve mal y no encuentra el icono.
+"%NSIS%" "%DIR%installer\pedrozilla.nsi"
 if errorlevel 1 (
     echo ERROR: fallo makensis.
     popd

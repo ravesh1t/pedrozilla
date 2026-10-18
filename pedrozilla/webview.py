@@ -79,11 +79,28 @@ class WebView(QWebEngineView):
         self.window_ref = window
         self.is_new_tab_page = False
         self.zoom = 1.0
+        # Navegación en curso: isLoading() de la página no es síncrono tras
+        # setUrl(), así que lo seguimos nosotros para poder diferir acciones
+        # (p. ej. guardar un marcador) hasta tener la URL y el título finales.
+        self.nav_pending = False
 
         page = WebPage(profile, window=window, parent=self)
         self.setPage(page)
 
         page.linkHovered.connect(self._on_link_hovered)
+        page.loadStarted.connect(self._on_nav_started)
+        page.loadFinished.connect(self._on_nav_finished)
+
+    def _on_nav_started(self) -> None:
+        self.nav_pending = True
+
+    def _on_nav_finished(self, _ok: bool) -> None:
+        self.nav_pending = False
+
+    @property
+    def is_loading(self) -> bool:
+        """True si hay una navegación en curso (cualquier motivo)."""
+        return self.nav_pending or self.web_page.isLoading()
 
     # -- utilidades ---------------------------------------------------------
     @property
@@ -98,6 +115,7 @@ class WebView(QWebEngineView):
         if not url:
             return
         self.is_new_tab_page = False
+        self.nav_pending = True  # loadStarted puede llegar tarde: lo marcamos ya.
         self.setUrl(QUrl(url))
 
     def load_html_page(self, html: str, base: str = "about:blank") -> None:

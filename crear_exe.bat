@@ -49,7 +49,7 @@ if errorlevel 1 (
 echo ==^> Creando Pedrozilla.exe (puede tardar varios minutos)
 rem Se empaqueta tambien pedrozilla.ico para que la ventana use el icono real
 rem (si faltara, brand_icon() dibujaria uno de reserva).
-%PY% -m PyInstaller --noconfirm --clean --windowed --name Pedrozilla --icon "pedrozilla\pedrozilla.ico" --add-data "pedrozilla\pedrozilla.ico;pedrozilla" "pedrozilla_launcher.py"
+%PY% -m PyInstaller --noconfirm --clean --windowed --name Pedrozilla --icon "pedrozilla\pedrozilla.ico" --add-data "pedrozilla\pedrozilla.ico;pedrozilla" --add-data "pedrozilla\data\qwebchannel.js;pedrozilla\data" "pedrozilla_launcher.py"
 if errorlevel 1 (
     echo ERROR: la creacion de la aplicacion ha fallado.
     popd
