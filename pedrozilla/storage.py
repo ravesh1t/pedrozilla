@@ -9,10 +9,11 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 
 from .utils import canonical_url
 
@@ -83,9 +84,10 @@ def default_download_dir() -> Path:
 class _JsonFile:
     """Archivo JSON con carga tolerante a errores y guardado atómico."""
 
-    def __init__(self, path: Path, default: Any) -> None:
+    def __init__(self, path: Path, default: Any, *, indent: int | None = None) -> None:
         self.path = path
         self._default = default
+        self._indent = indent
         self.data = self._load()
 
     def _load(self) -> Any:
@@ -104,9 +106,17 @@ class _JsonFile:
 
     def save(self) -> None:
         tmp = self.path.with_name(self.path.name + ".tmp")
+        # Los archivos grandes (historial, sesión) se guardan compactos: el
+        # sangrado de 2 espacios multiplicaba por ~1,6 el tamaño y el tiempo de
+        # escritura en cada navegación. settings.json sí queda legible.
+        kwargs: dict[str, Any] = {"ensure_ascii": False}
+        if self._indent is None:
+            kwargs["separators"] = (",", ":")
+        else:
+            kwargs["indent"] = self._indent
         try:
             with tmp.open("w", encoding="utf-8") as handle:
-                json.dump(self.data, handle, ensure_ascii=False, indent=2)
+                json.dump(self.data, handle, **kwargs)
             os.replace(tmp, self.path)
         except OSError:
             pass
@@ -119,7 +129,7 @@ class Settings(QObject):
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
-        self._file = _JsonFile(config_dir() / "settings.json", DEFAULT_SETTINGS)
+        self._file = _JsonFile(config_dir() / "settings.json", DEFAULT_SETTINGS, indent=2)
 
     def get(self, key: str, default: Any = None) -> Any:
         return self._file.data.get(key, DEFAULT_SETTINGS.get(key, default))
@@ -155,49 +165,99 @@ class Settings(QObject):
 
 
 class History(QObject):
-    """Historial de navegación (más reciente primero)."""
+    """Historial de navegación (más reciente primero).
+
+    El guardado en disco se difiere: navegar no debe reescribir todo el JSON
+    en cada carga. `flush()` fuerza la escritura (al cerrar la ventana y al
+    salir de la aplicación).
+    """
 
     changed = Signal()
+
+    # Se guarda tras 3 s sin navegar (o cada 100 cambios, para no perder
+    # demasiado si el navegador se cierra de golpe). Con 8.000 entradas,
+    # escribir el JSON bloquea ~120 ms: mejor una vez en reposo que en cada
+    # carga de página.
+    SAVE_DELAY_MS = 3000
+    MAX_PENDING_SAVES = 100
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._file = _JsonFile(config_dir() / "history.json", [])
-        self._entries: list[dict[str, Any]] = self._file.data
+        # OrderedDict: mover una URL al principio y expulsar la más antigua
+        # son O(1), en vez de recorrer y reordenar miles de entradas.
+        self._entries: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        for item in self._file.data:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url", ""))
+            if url and url not in self._entries:
+                self._entries[url] = item
+        self._dirty = False
+        self._pending = 0
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(self.SAVE_DELAY_MS)
+        self._save_timer.timeout.connect(self.flush)
+
+    def _schedule_save(self) -> None:
+        self._dirty = True
+        self._pending += 1
+        if self._pending >= self.MAX_PENDING_SAVES:
+            self.flush()
+        else:
+            # Reinicia la cuenta atrás: si el usuario sigue navegando, no se
+            # escribe hasta que lleve 3 s parado.
+            self._save_timer.start()
+
+    def flush(self) -> None:
+        """Escribe ahora los cambios pendientes (si los hay)."""
+        if self._save_timer.isActive():
+            self._save_timer.stop()
+        self._pending = 0
+        if not self._dirty:
+            return
+        self._file.data = list(self._entries.values())
+        self._file.save()
+        self._dirty = False
 
     def add(self, title: str, url: str) -> None:
         if not url or url.startswith(("about:", "file:", "data:")):
             return
         title = (title or "").strip() or url
 
-        # Si ya existía, se mueve al principio y se actualiza.
-        existing = next((item for item in self._entries if item.get("url") == url), None)
-        if existing:
+        now = time.time()
+        existing = self._entries.get(url)
+        if existing is not None:
             existing["title"] = title
-            existing["visited"] = time.time()
+            existing["visited"] = now
             existing["visits"] = int(existing.get("visits", 1)) + 1
-            self._entries.remove(existing)
-            self._entries.insert(0, existing)
+            self._entries.move_to_end(url, last=False)
         else:
-            self._entries.insert(
-                0,
-                {"title": title, "url": url, "visited": time.time(), "visits": 1},
-            )
+            self._entries[url] = {
+                "title": title,
+                "url": url,
+                "visited": now,
+                "visits": 1,
+            }
+            self._entries.move_to_end(url, last=False)
 
-        del self._entries[HISTORY_LIMIT:]
-        self._file.data = self._entries
-        self._file.save()
+        while len(self._entries) > HISTORY_LIMIT:
+            self._entries.popitem(last=True)
+
+        self._schedule_save()
         self.changed.emit()
 
     def entries(self) -> list[dict[str, Any]]:
-        return list(self._entries)
+        return list(self._entries.values())
 
     def search(self, query: str) -> list[dict[str, Any]]:
         query = (query or "").strip().lower()
         if not query:
-            return list(self._entries)
+            return list(self._entries.values())
         return [
             item
-            for item in self._entries
+            for item in self._entries.values()
             if query in str(item.get("title", "")).lower()
             or query in str(item.get("url", "")).lower()
         ]
@@ -207,24 +267,27 @@ class History(QObject):
         if not query:
             return []
         matches: list[str] = []
-        for item in self._entries:
+        seen: set[str] = set()
+        for item in self._entries.values():
             url = str(item.get("url", ""))
-            if query in url.lower() and url not in matches:
+            if url not in seen and query in url.lower():
+                seen.add(url)
                 matches.append(url)
-            if len(matches) >= limit:
-                break
+                if len(matches) >= limit:
+                    break
         return matches
 
     def remove(self, url: str) -> None:
-        self._entries = [item for item in self._entries if item.get("url") != url]
-        self._file.data = self._entries
-        self._file.save()
+        if self._entries.pop(url, None) is None:
+            return
+        self._schedule_save()
         self.changed.emit()
 
     def clear(self) -> None:
-        self._entries = []
-        self._file.data = self._entries
-        self._file.save()
+        self._entries.clear()
+        self._dirty = True
+        # Borrar datos es una acción explícita: se escribe ya, sin esperar.
+        self.flush()
         self.changed.emit()
 
 
@@ -242,6 +305,9 @@ class Bookmarks(QObject):
         super().__init__(parent)
         self._file = _JsonFile(config_dir() / "bookmarks.json", [])
         self._items: list[dict[str, Any]] = self._file.data
+        # Índice de URLs canónicas: `contains()` se llama en cada navegación
+        # (para la estrella) y recorrer la lista entera era O(n).
+        self._keys: set[str] = set()
         # Limpia duplicados heredados (mismo sitio con/without barra final).
         if self._dedupe():
             self._persist()
@@ -262,14 +328,15 @@ class Bookmarks(QObject):
             kept.append(item)
         if changed:
             self._items = kept
+        self._keys = seen
         return changed
 
     def contains(self, url: str) -> bool:
-        key = canonical_url(url)
-        return any(canonical_url(str(item.get("url", ""))) == key for item in self._items)
+        return bool(url) and canonical_url(url) in self._keys
 
     def add(self, title: str, url: str) -> bool:
-        if not url or self.contains(url):
+        key = canonical_url(url)
+        if not url or key in self._keys:
             return False
         self._items.append(
             {
@@ -278,6 +345,7 @@ class Bookmarks(QObject):
                 "added": time.time(),
             }
         )
+        self._keys.add(key)
         self._persist()
         return True
 
@@ -291,11 +359,14 @@ class Bookmarks(QObject):
         ]
         if len(self._items) == before:
             return False
+        self._keys.discard(key)
         self._persist()
         return True
 
     def rename(self, url: str, title: str) -> None:
         key = canonical_url(url)
+        if key not in self._keys:
+            return
         for item in self._items:
             if canonical_url(str(item.get("url", ""))) == key:
                 item["title"] = (title or "").strip() or str(item.get("url", ""))

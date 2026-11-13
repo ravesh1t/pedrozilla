@@ -23,10 +23,7 @@ if [ -z "${QTWEBENGINE_CHROMIUM_FLAGS:-}" ] && command -v xdpyinfo >/dev/null 2>
   fi
 fi
 
-if ! python3 -c "import PySide6.QtWebEngineWidgets" 2>/dev/null; then
-  echo "Falta PySide6 con Qt WebEngine. Instálalo con:"
-  echo "  python3 -m pip install --user PySide6"
-  exit 1
-fi
+# La comprobación de PySide6 la hace pedrozilla/__main__.py: comprobar la
+# dependencia aquí con otro intérprete duplicaba el tiempo de arranque.
 
 exec python3 -m pedrozilla "$@"

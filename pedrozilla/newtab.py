@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from .storage import SEARCH_ENGINES
-from .utils import host_of, initial_letter, color_for
+from .utils import initial_letter, color_for
 
 
 def _load_qwebchannel_js() -> str:
@@ -77,7 +77,6 @@ def _shortcuts_html(shortcuts: list[dict]) -> str:
     for item in items:
         url = html_module.escape(str(item.get("url", "")), quote=True)
         title = html_module.escape(str(item.get("title", "")) or url)
-        host = html_module.escape(host_of(str(item.get("url", ""))) or url)
         letter = html_module.escape(initial_letter(str(item.get("title", "")) or url))
         color = color_for(str(item.get("url", "")))
         cards.append(
@@ -88,7 +87,7 @@ def _shortcuts_html(shortcuts: list[dict]) -> str:
             '</a>'
             '<button class="sremove" type="button" title="Quitar acceso" aria-label="Quitar %(title)s">×</button>'
             '</div>'
-            % {"url": url, "title": title, "host": host, "letter": letter, "color": color}
+            % {"url": url, "title": title, "letter": letter, "color": color}
         )
     return (
         '<section class="shortcuts" aria-label="Accesos rápidos">'
@@ -221,20 +220,29 @@ q.addEventListener('keydown',e=>{
   if(e.key==='Enter'){ if(sugIdx>=0 && items[sugIdx]){ e.preventDefault(); q.value=items[sugIdx].textContent; sug.classList.remove('show'); sugIdx=-1; go(q.value); return; } e.preventDefault(); go(q.value); return; }
   if(e.key==='Escape'){ sug.classList.remove('show'); sugIdx=-1; }
 });
+let sugTimer=null, sugAbort=null;
 q.addEventListener('input',()=>{
   const v=q.value.trim();
-  if(v.length<2){ document.getElementById('suggest').classList.remove('show'); sugIdx=-1; return; }
-  fetch('https://duckduckgo.com/ac/?q='+encodeURIComponent(v)+'&type=thought').then(r=>r.json()).then(list=>{
-    const sug=document.getElementById('suggest');
-    sug.innerHTML=''; sugIdx=-1;
-    (list||[]).slice(0,6).forEach(x=>{
-      const d=document.createElement('div');
-      d.textContent=x.phrase||x;
-      d.onclick=()=>{ q.value=d.textContent; sug.classList.remove('show'); go(q.value); };
-      sug.appendChild(d);
-    });
-    if(sug.children.length) sug.classList.add('show'); else sug.classList.remove('show');
-  }).catch(()=>{ document.getElementById('suggest').classList.remove('show'); });
+  const sug=document.getElementById('suggest');
+  if(sugTimer){ clearTimeout(sugTimer); sugTimer=null; }
+  if(sugAbort){ sugAbort.abort(); sugAbort=null; }
+  if(v.length<2){ sug.classList.remove('show'); sugIdx=-1; return; }
+  // Espera a que el usuario deje de teclear y cancela la petición anterior:
+  // antes se lanzaba una consulta a DuckDuckGo por cada pulsación.
+  sugTimer=setTimeout(()=>{
+    const ac=new AbortController(); sugAbort=ac;
+    fetch('https://duckduckgo.com/ac/?q='+encodeURIComponent(v)+'&type=thought',{signal:ac.signal}).then(r=>r.json()).then(list=>{
+      if(ac.signal.aborted) return;
+      sug.innerHTML=''; sugIdx=-1;
+      (list||[]).slice(0,6).forEach(x=>{
+        const d=document.createElement('div');
+        d.textContent=x.phrase||x;
+        d.onclick=()=>{ q.value=d.textContent; sug.classList.remove('show'); go(q.value); };
+        sug.appendChild(d);
+      });
+      if(sug.children.length) sug.classList.add('show'); else sug.classList.remove('show');
+    }).catch(()=>{ if(!ac.signal.aborted) sug.classList.remove('show'); });
+  },250);
 });
 let sgrid=document.getElementById('sgrid');
 document.getElementById('sadd').onclick=async()=>{

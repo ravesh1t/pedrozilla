@@ -56,6 +56,9 @@ def main(argv: list[str] | None = None) -> int:
     history = History(app)
     bookmarks = Bookmarks(app)
 
+    # El historial se guarda con retardo; al salir, no se pierde lo pendiente.
+    app.aboutToQuit.connect(history.flush)
+
     apply_theme(app, settings.get("theme", "classic"))
 
     context = BrowserContext(settings, history, bookmarks)

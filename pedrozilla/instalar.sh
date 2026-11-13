@@ -9,8 +9,9 @@
 
 set -euo pipefail
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LAUNCHER="$PROJECT_DIR/run.sh"
+PACKAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$PACKAGE_DIR")"
+LAUNCHER="$PACKAGE_DIR/run.sh"
 APP_ID="pedrozilla"
 DISPLAY_NAME="Pedrozilla"
 PY="python3"
@@ -33,7 +34,7 @@ chmod +x "$LAUNCHER"
 # trae (habitual en Ubuntu 24.04), dejamos una copia dentro del proyecto: así el
 # navegador funciona sin permisos de administrador y sin tocar el sistema.
 ensure_xcb_cursor() {
-  local libs="$PROJECT_DIR/pedrozilla/libs"
+  local libs="$PACKAGE_DIR/libs"
   if ldconfig -p 2>/dev/null | grep -q 'libxcb-cursor\.so\.0'; then
     echo "==> libxcb-cursor disponible en el sistema"
     return 0

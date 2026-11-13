@@ -7,6 +7,8 @@ clasica. No hay caja de busqueda aparte: se busca desde la propia omnibox.
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 DARK = """
 QWidget { background: #202124; color: #e8eaed; font-size: 13px; }
 QMainWindow, QDialog { background: #202124; }
@@ -325,6 +327,7 @@ QTabWidget#DialogTabs QTabBar::tab { min-width: 90px; border-radius: 4px; margin
 """
 
 
+@lru_cache(maxsize=8)
 def stylesheet(theme: str, close_icon: str = "") -> str:
     """Devuelve la hoja de estilo del tema indicado.
 

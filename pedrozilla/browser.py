@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -18,7 +19,6 @@ from PySide6.QtCore import (
     Slot,
 )
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap
-from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import (
     QWebEngineContextMenuRequest,
@@ -51,7 +51,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .dialogs import AboutDialog, BookmarksDialog, HistoryDialog, SettingsDialog
+from . import __version__
 from .downloads import DownloadRow, DownloadsDialog, DownloadsManager
 from .extensions import ExtensionBridge, ExtensionsDialog, extension_manager
 from .newtab import new_tab_html
@@ -94,6 +94,7 @@ except Exception:
     _PERMISSION_LABELS = {}
 
 
+@lru_cache(maxsize=8)
 def brand_icon(size: int = 64) -> QIcon:
     """Icono del navegador: el archivo `pedrozilla.ico` si existe.
 
@@ -147,11 +148,21 @@ def close_icon_path() -> str:
 
 
 def _letter_icon(text: str, color_source: str = "", size: int = 20) -> QIcon:
+    """Icono de reserva; se cachea por letra/color/tamaño.
+
+    Antes se redibujaba cada vez que una pestaña cambiaba de favicon, aunque
+    el resultado (la inicial y el color del sitio) fuese el mismo.
+    """
+    return _draw_letter_icon(initial_letter(text), color_for(color_source or text), size)
+
+
+@lru_cache(maxsize=256)
+def _draw_letter_icon(letter: str, color: str, size: int) -> QIcon:
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor(color_for(color_source or text)))
+    painter.setBrush(QColor(color))
     painter.setPen(Qt.PenStyle.NoPen)
     painter.drawEllipse(1, 1, size - 2, size - 2)
     painter.setPen(QColor("#202124"))
@@ -159,7 +170,7 @@ def _letter_icon(text: str, color_source: str = "", size: int = 20) -> QIcon:
     font.setPixelSize(max(9, int(size * 0.55)))
     font.setBold(True)
     painter.setFont(font)
-    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initial_letter(text))
+    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, letter)
     painter.end()
     return QIcon(pixmap)
 
@@ -315,6 +326,9 @@ class BrowserWindow(QMainWindow):
         self.debug_console = False
         # Marcador pedido por el usuario mientras la pestaña aún cargaba.
         self._pending_bookmark: WebView | None = None
+        # Las sugerencias del autocompletado se reconstruyen solo al enfocar
+        # la omnibox, no en cada navegación (el historial cambia muy a menudo).
+        self._completions_dirty = True
 
         self._devtools_view: QWebEngineView | None = None
         self._devtools_page: QWebEnginePage | None = None
@@ -333,11 +347,10 @@ class BrowserWindow(QMainWindow):
         self._build_status_bar()
 
         self.bookmarks.changed.connect(self._rebuild_bookmarks_bar)
-        self.bookmarks.changed.connect(self._refresh_completions)
-        self.history.changed.connect(self._refresh_completions)
+        self.bookmarks.changed.connect(self._invalidate_completions)
+        self.history.changed.connect(self._invalidate_completions)
         self.downloads.started.connect(self._on_download_started)
         self.downloads.updated.connect(lambda _download: self._refresh_downloads_button())
-        self._refresh_completions()
 
     # --------------------------------------------------------------- montaje
     def _build_central(self) -> None:
@@ -783,9 +796,7 @@ class BrowserWindow(QMainWindow):
             search_template=self.settings.search_template,
             engine_key=self.settings.get("search_engine", "duckduckgo"),
             theme=self.settings.get("theme", "classic"),
-            bookmarks=self.bookmarks.items(),
             shortcuts=self.context.shortcuts.items(),
-            history=self.history.entries(),
             accent=self.settings.get("accent", "#8ab4f8"),
             brand=BRAND,
             footer=(
@@ -898,7 +909,9 @@ class BrowserWindow(QMainWindow):
     def _on_url_changed(self, view: WebView) -> None:
         if view is self.current_view():
             self._update_omnibox(view)
-            self._update_nav_actions(view)
+            # Los botones atrás/adelante se refrescan al terminar la carga
+            # (QWebEngineHistory.canGoBack() es caro y urlChanged puede
+            # dispararse varias veces por redirección).
             self._update_star(view)
             self._update_window_title()
 
@@ -927,7 +940,11 @@ class BrowserWindow(QMainWindow):
     def _on_load_finished(self, view: WebView, ok: bool) -> None:
         self._sync_titles(view)
         if ok:
-            self._refresh_title_from_document(view)
+            # document.title solo hace falta si Qt aún no tiene un título real
+            # (la URL como título provisional). Evita un viaje JS por carga.
+            current = view.title().strip()
+            if not current or current == view.url_string():
+                self._refresh_title_from_document(view)
         if view is self.current_view():
             self.progress.setVisible(False)
             self.action_reload.setText("⟳")
@@ -1023,17 +1040,26 @@ class BrowserWindow(QMainWindow):
         self.omnibox.setText(text)
         self._navigate_from_omnibox()
 
+    def _invalidate_completions(self) -> None:
+        self._completions_dirty = True
+
     def _refresh_completions(self) -> None:
+        if not self._completions_dirty:
+            return
         values: list[str] = []
+        seen: set[str] = set()
         for item in self.bookmarks.items():
             url = str(item.get("url", ""))
-            if url and url not in values:
+            if url and url not in seen:
+                seen.add(url)
                 values.append(url)
         for entry in self.history.entries()[:600]:
             url = str(entry.get("url", ""))
-            if url and url not in values:
+            if url and url not in seen:
+                seen.add(url)
                 values.append(url)
         self._completion_model.setStringList(values)
+        self._completions_dirty = False
 
     # ------------------------------------------------------------ navegación
     def _update_nav_actions(self, view: WebView) -> None:
@@ -1190,6 +1216,10 @@ class BrowserWindow(QMainWindow):
         )
 
     def _rebuild_bookmarks_bar(self) -> None:
+        # Si el usuario ocultó la barra no merece la pena crear 40 botones
+        # (se reconstruye al volver a mostrarla).
+        if self.bookmarks_bar.isHidden():
+            return
         self.bookmarks_bar.clear()
         items = self.bookmarks.items()
         if not items:
@@ -1229,12 +1259,19 @@ class BrowserWindow(QMainWindow):
     def _toggle_bookmarks_bar(self, checked: bool) -> None:
         self.bookmarks_bar.setVisible(checked)
         self.settings.set("show_bookmarks_bar", checked)
+        if checked:
+            self._rebuild_bookmarks_bar()
 
     def show_bookmarks_manager(self) -> None:
+        # Los diálogos se importan al abrirlos: no hacen falta para arrancar.
+        from .dialogs import BookmarksDialog
+
         BookmarksDialog(self.bookmarks, self.open_url, self).exec()
 
     # -------------------------------------------------------------- historial
     def show_history(self) -> None:
+        from .dialogs import HistoryDialog
+
         HistoryDialog(self.history, self.open_url, self).exec()
 
     def open_url(self, url: str, new_tab: bool = False, background: bool = False) -> None:
@@ -1281,6 +1318,8 @@ class BrowserWindow(QMainWindow):
 
     # ---------------------------------------------------------------- ajustes
     def show_settings(self) -> None:
+        from .dialogs import SettingsDialog
+
         dialog = SettingsDialog(self.settings, self, clear_data=self.clear_browsing_data)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -1538,6 +1577,9 @@ class BrowserWindow(QMainWindow):
         view = self.current_view()
         if view is None:
             return
+        # QtPrintSupport solo se carga al imprimir (ahorra trabajo al arrancar).
+        from PySide6.QtPrintSupport import QPrintDialog, QPrinter
+
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         dialog = QPrintDialog(printer, self)
         dialog.setWindowTitle("Imprimir")
@@ -1664,6 +1706,8 @@ class BrowserWindow(QMainWindow):
         self.bookmarks_bar.setVisible(
             visible and bool(self.settings.get("show_bookmarks_bar"))
         )
+        if visible:
+            self._rebuild_bookmarks_bar()
 
     def toggle_fullscreen(self) -> None:
         if self._html_fullscreen:
@@ -1677,8 +1721,10 @@ class BrowserWindow(QMainWindow):
             self.showFullScreen()
 
     def show_about(self) -> None:
+        from .dialogs import AboutDialog
+
         info = {
-            "Versión": "1.0.2",
+            "Versión": __version__,
             "Motor": f"Chromium {self.context.chromium_version} (Qt WebEngine)",
             "Perfil": "incógnito (no se guarda nada)" if self.incognito else str(config_dir()),
             "Descargas": str(self.settings.download_path),
@@ -1702,6 +1748,8 @@ class BrowserWindow(QMainWindow):
         )
 
     def closeEvent(self, event) -> None:  # noqa: N802 (API de Qt)
+        # El historial se escribe con retardo; al cerrar no debe perderse.
+        self.context.history.flush()
         if not self.incognito:
             self._save_session()
         if self._devtools_view is not None:

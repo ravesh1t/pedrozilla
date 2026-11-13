@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any, Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QTimer, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -21,9 +21,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QTableView,
     QTabWidget,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -38,6 +37,59 @@ def _stamp(timestamp: float | None) -> str:
     if not timestamp:
         return ""
     return time.strftime("%d/%m/%Y %H:%M", time.localtime(float(timestamp)))
+
+
+class _TableModel(QAbstractTableModel):
+    """Modelo de solo lectura para los listados.
+
+    QTableWidget crea un objeto por celda (32.000 para un historial de 8.000
+    entradas). Con 8.000 filas, abrir el diálogo tardaba ~0,7 s y gastaba
+    mucha memoria; un modelo devuelve los datos bajo demanda y solo pinta las
+    filas visibles.
+    """
+
+    def __init__(self, columns: tuple[str, ...], parent=None) -> None:
+        super().__init__(parent)
+        self._columns = columns
+        self._rows: list[tuple[list[str], str]] = []
+
+    def set_rows(self, rows: list[tuple[list[str], str]]) -> None:
+        self.beginResetModel()
+        self._rows = rows
+        self.endResetModel()
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
+        return 0 if parent.isValid() else len(self._rows)
+
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
+        return 0 if parent.isValid() else len(self._columns)
+
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        values, url = self._rows[index.row()]
+        column = index.column()
+        if role == Qt.ItemDataRole.UserRole:
+            return url
+        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
+            return values[column] if column < len(values) else ""
+        return None
+
+    def headerData(  # noqa: N802
+        self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole
+    ):
+        if (
+            orientation == Qt.Orientation.Horizontal
+            and role == Qt.ItemDataRole.DisplayRole
+            and 0 <= section < len(self._columns)
+        ):
+            return self._columns[section]
+        return None
+
+    def url_at(self, row: int) -> str:
+        if 0 <= row < len(self._rows):
+            return self._rows[row][1]
+        return ""
 
 
 class _TableDialog(QDialog):
@@ -62,18 +114,25 @@ class _TableDialog(QDialog):
         self.search = QLineEdit()
         self.search.setPlaceholderText("Buscar…")
         self.search.setClearButtonEnabled(True)
-        self.search.textChanged.connect(self.refresh)
+        # Filtrar miles de entradas en cada pulsación congela la tabla;
+        # esperamos a que el usuario deje de escribir.
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(180)
+        self._refresh_timer.timeout.connect(self.refresh)
+        self.search.textChanged.connect(self._schedule_refresh)
         layout.addWidget(self.search)
 
-        self.table = QTableWidget(0, len(self.columns))
-        self.table.setHorizontalHeaderLabels(list(self.columns))
+        self.model = _TableModel(self.columns, self)
+        self.table = QTableView()
+        self.table.setModel(self.model)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
-        self.table.itemDoubleClicked.connect(lambda _item: self.open_current(False))
+        self.table.doubleClicked.connect(lambda _index: self.open_current(False))
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for index in range(1, len(self.columns)):
@@ -94,27 +153,19 @@ class _TableDialog(QDialog):
 
     # -- API para las subclases --------------------------------------------
     def current_row(self) -> int:
-        return self.table.currentRow()
+        index = self.table.currentIndex()
+        return index.row() if index.isValid() else -1
 
     def current_url(self) -> str:
-        row = self.current_row()
-        if row < 0:
-            return ""
-        item = self.table.item(row, len(self.columns) - 1)
-        return item.data(Qt.ItemDataRole.UserRole) if item else ""
+        return self.model.url_at(self.current_row())
+
+    def _schedule_refresh(self) -> None:
+        self._refresh_timer.start()
 
     def set_rows(self, rows: list[tuple[list[str], str]]) -> None:
         """rows: [([columnas...], url), ...]"""
-        self.table.setRowCount(0)
-        for values, url in rows:
-            index = self.table.rowCount()
-            self.table.insertRow(index)
-            for column, text in enumerate(values):
-                item = QTableWidgetItem(text)
-                item.setToolTip(text)
-                item.setData(Qt.ItemDataRole.UserRole, url)
-                self.table.setItem(index, column, item)
-        self.hint.setVisible(bool(rows) is False)
+        self.model.set_rows(rows)
+        self.hint.setVisible(not rows)
 
     def open_current(self, new_tab: bool = False) -> None:
         url = self.current_url()
@@ -227,7 +278,7 @@ class BookmarksDialog(_TableDialog):
         if row < 0:
             return
         url = self.current_url()
-        current = self.table.item(row, 0).text()
+        current = self.model.index(row, 0).data() or ""
         new_name, ok = QInputDialog.getText(self, "Renombrar marcador", "Nombre:", text=current)
         if ok and new_name.strip():
             self.bookmarks.rename(url, new_name.strip())

@@ -12,23 +12,23 @@ rem lanzador "py" (evita el alias vacio de python.exe de la Microsoft Store) y,
 rem si el PATH de esta sesion aun no esta actualizado, las rutas habituales.
 set "PY="
 
-py -c "import PySide6.QtWebEngineWidgets" >nul 2>nul
+py -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('PySide6.QtWebEngineWidgets') else 1)" >nul 2>nul
 if not errorlevel 1 set "PY=py"
 if defined PY goto launch
 
-python -c "import PySide6.QtWebEngineWidgets" >nul 2>nul
+python -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('PySide6.QtWebEngineWidgets') else 1)" >nul 2>nul
 if not errorlevel 1 set "PY=python"
 if defined PY goto launch
 
 if exist "%LOCALAPPDATA%\Programs\Python\Launcher\py.exe" (
-    "%LOCALAPPDATA%\Programs\Python\Launcher\py.exe" -c "import PySide6.QtWebEngineWidgets" >nul 2>nul
+    "%LOCALAPPDATA%\Programs\Python\Launcher\py.exe" -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('PySide6.QtWebEngineWidgets') else 1)" >nul 2>nul
     if not errorlevel 1 set "PY="%LOCALAPPDATA%\Programs\Python\Launcher\py.exe""
 )
 if defined PY goto launch
 
 for /d %%D in ("%LOCALAPPDATA%\Programs\Python\Python*") do (
     if not defined PY (
-        "%%D\python.exe" -c "import PySide6.QtWebEngineWidgets" >nul 2>nul
+        "%%D\python.exe" -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('PySide6.QtWebEngineWidgets') else 1)" >nul 2>nul
         if not errorlevel 1 set "PY="%%D\python.exe""
     )
 )

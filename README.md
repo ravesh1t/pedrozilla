@@ -1,6 +1,6 @@
 # Pedrozilla
 
-> **1.1.0** — navegador de escritorio basado en Chromium (Qt WebEngine).
+> **1.1.1** — navegador de escritorio basado en Chromium (Qt WebEngine).
 
 Slop pura y dura que come RAM todo el día: Chromium metido en Python (PySide6),
 con interfaz clásica tipo Firefox 7. Sin cuentas ni sincronización.
@@ -53,7 +53,7 @@ Vuelve a ejecutarlo si mueves la carpeta del proyecto.
 
 ```bat
 crear_exe.bat      :: dist\Pedrozilla\Pedrozilla.exe       portátil (carpeta autosuficiente)
-crear_setup.bat    :: dist\PedrozillaSetup-1.1.0.exe       instalador de un clic
+crear_setup.bat    :: dist\PedrozillaSetup-1.1.1.exe       instalador de un clic
 ```
 
 El instalador no pide Python ni administrador: instala en

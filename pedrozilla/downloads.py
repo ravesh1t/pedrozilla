@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QUrl, Qt, Signal
+from PySide6.QtCore import QObject, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWebEngineCore import QWebEngineDownloadRequest, QWebEngineProfile
 from PySide6.QtWidgets import (
@@ -58,10 +58,16 @@ class Download(QObject):
         self.path = Path(request.downloadDirectory()) / request.downloadFileName()
         self._last_state = request.state()
 
-        request.receivedBytesChanged.connect(self._changed)
-        request.totalBytesChanged.connect(self._changed)
+        request.receivedBytesChanged.connect(self._schedule_update)
+        request.totalBytesChanged.connect(self._schedule_update)
         request.isFinishedChanged.connect(self._changed)
         request.stateChanged.connect(self._on_state_changed)
+        # Los bytes llegan decenas de veces por segundo; agrupamos las
+        # actualizaciones de la interfaz para no repintar en cada paquete.
+        self._update_timer = QTimer(self)
+        self._update_timer.setSingleShot(True)
+        self._update_timer.setInterval(100)
+        self._update_timer.timeout.connect(self._changed)
 
     # -- estado -------------------------------------------------------------
     @property
@@ -148,10 +154,16 @@ class Download(QObject):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     # -- señales ------------------------------------------------------------
+    def _schedule_update(self) -> None:
+        if not self._update_timer.isActive():
+            self._update_timer.start()
+
     def _changed(self) -> None:
         self.updated.emit()
 
     def _on_state_changed(self, state) -> None:
+        if self._update_timer.isActive():
+            self._update_timer.stop()
         self.updated.emit()
         if state in (
             QWebEngineDownloadRequest.DownloadState.DownloadCompleted,
@@ -342,9 +354,14 @@ class DownloadsDialog(QDialog):
         self.manager.clear_finished()
         self.refresh()
 
-    def _on_manager_update(self, _download) -> None:
-        if self.isVisible():
-            self.refresh()
+    def _on_manager_update(self, download) -> None:
+        if not self.isVisible():
+            return
+        # Cada fila ya escucha download.updated y se refresca sola; solo
+        # reconstruimos la lista cuando aparece o desaparece una descarga.
+        if download is not None and id(download) in self.rows:
+            return
+        self.refresh()
 
     def refresh(self) -> None:
         downloads = self.manager.downloads()
