@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias de Python
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PySide6 pyinstaller
+
+      - name: Instalar NSIS
+        shell: pwsh
+        run: |
+          choco install nsis --no-progress -y
+          $nsis = "C:\Program Files (x86)\NSIS"
+          if (-not (Test-Path $nsis)) { $nsis = "C:\Program Files\NSIS" }
+          $nsis | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Crear aplicación
+        shell: cmd
+        run: crear_exe.bat
+
+      - name: Crear instalador
+        shell: cmd
+        run: crear_setup.bat
+
+      - name: Crear ZIP portátil
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/Pedrozilla/* `
+            -DestinationPath dist/Pedrozilla-1.1.1-windows-portable.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          if-no-files-found: error
+          path: |
+            dist/PedrozillaSetup-1.1.1.exe
+            dist/Pedrozilla-1.1.1-windows-portable.zip
+
+  linux:
+    name: Linux packages
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias del sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2t64 libegl1 libgl1 libnss3 libxcb-cursor0 \
+            libxkbcommon-x11-0
+
+      - name: Instalar dependencias de Python
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PySide6 pyinstaller
+
+      - name: Crear paquetes
+        env:
+          TAG: ${{ github.ref_name }}
+          PYTHON: python
+        run: |
+          VERSION="${TAG#v}"
+          ./packaging/linux/build.sh "$VERSION"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          if-no-files-found: error
+          path: dist-linux/*
+
+  release:
+    name: Publicar release
+    needs: [windows, linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Comprobar archivos
+        run: ls -lh release
+
+      - name: Generar sumas SHA256
+        run: |
+          cd release
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Pedrozilla ${{ github.ref_name }}
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
+          files: release/*

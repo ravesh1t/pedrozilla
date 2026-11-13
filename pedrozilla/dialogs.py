@@ -361,6 +361,10 @@ class SettingsDialog(QDialog):
         self.ask_dir.setChecked(bool(self.settings.get("ask_download_dir")))
         form.addWidget(self.ask_dir)
 
+        self.check_updates = QCheckBox("Buscar actualizaciones automáticamente en GitHub")
+        self.check_updates.setChecked(bool(self.settings.get("check_updates", True)))
+        form.addWidget(self.check_updates)
+
         form.addStretch(1)
         return page
 
@@ -445,6 +449,7 @@ class SettingsDialog(QDialog):
         self.startup.setCurrentIndex(max(0, self.startup.findData(DEFAULT_SETTINGS["startup"])))
         self.download_dir.setText(DEFAULT_SETTINGS["download_dir"])
         self.ask_dir.setChecked(DEFAULT_SETTINGS["ask_download_dir"])
+        self.check_updates.setChecked(DEFAULT_SETTINGS["check_updates"])
         self.theme.setCurrentIndex(max(0, self.theme.findData(DEFAULT_SETTINGS["theme"])))
         self.show_bookmarks.setChecked(DEFAULT_SETTINGS["show_bookmarks_bar"])
         self.zoom.setValue(DEFAULT_SETTINGS["default_zoom"] * 100)
@@ -459,6 +464,7 @@ class SettingsDialog(QDialog):
             "startup": self.startup.currentData(),
             "download_dir": self.download_dir.text().strip(),
             "ask_download_dir": self.ask_dir.isChecked(),
+            "check_updates": self.check_updates.isChecked(),
             "theme": self.theme.currentData(),
             "show_bookmarks_bar": self.show_bookmarks.isChecked(),
             "default_zoom": round(self.zoom.value() / 100, 2),

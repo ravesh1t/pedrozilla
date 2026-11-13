@@ -43,6 +43,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "user_agent": "",
     "javascript": True,
     "ignore_certificate_errors": False,
+    "check_updates": True,
+    "last_update_check": 0,
+    "last_update_prompt": "",
     # IDs de extensiones que el usuario dejó activas (las instaladas en el
     # perfil las recarga Qt en cada arranque, pero siempre desactivadas).
     "enabled_extensions": [],

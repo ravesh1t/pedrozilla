@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from PySide6.QtCore import (
     QStandardPaths,
     QStringListModel,
     Qt,
+    QTimer,
     QUrl,
     Signal,
     Slot,
@@ -294,9 +296,14 @@ class BrowserContext:
     # -- ventanas -----------------------------------------------------------
     def open_window(self, incognito: bool = False, urls: list[str] | None = None) -> "BrowserWindow":
         profile = self.new_off_the_record_profile() if incognito else self.persistent_profile
+        first_normal_window = not incognito and not any(
+            not existing.incognito for existing in self.windows
+        )
         window = BrowserWindow(self, profile, incognito=incognito)
         window.open_initial_tabs(list(urls or []))
         self.windows.append(window)
+        if first_normal_window:
+            window.schedule_auto_update_check()
         window.show()
         window.raise_()
         return window
@@ -329,6 +336,8 @@ class BrowserWindow(QMainWindow):
         # Las sugerencias del autocompletado se reconstruyen solo al enfocar
         # la omnibox, no en cada navegación (el historial cambia muy a menudo).
         self._completions_dirty = True
+        self._update_checker = None
+        self._update_check_silent = True
 
         self._devtools_view: QWebEngineView | None = None
         self._devtools_page: QWebEnginePage | None = None
@@ -644,7 +653,10 @@ class BrowserWindow(QMainWindow):
         settings_menu = self._menu("&Ajustes")
         self._add(settings_menu, "Preferencias…", self.show_settings, "Ctrl+,")
         self._add(settings_menu, "Extensiones…", self.show_extensions, "Ctrl+Shift+E")
-        self._add(self._menu("A&yuda"), f"Acerca de {BRAND}", self.show_about, "F1")
+        help_menu = self._menu("A&yuda")
+        self._add(help_menu, "Buscar actualizaciones…", self.check_updates)
+        help_menu.addSeparator()
+        self._add(help_menu, f"Acerca de {BRAND}", self.show_about, "F1")
 
     def _build_shortcuts(self) -> None:
         self._add(self, "Atrás", self.go_back, "Alt+Left")
@@ -1719,6 +1731,110 @@ class BrowserWindow(QMainWindow):
         else:
             self._set_chrome_visible(False)
             self.showFullScreen()
+
+    # ---------------------------------------------------- actualizaciones
+    def schedule_auto_update_check(self) -> None:
+        """Comprueba actualizaciones una vez por arranque, sin bloquear."""
+        if not self.incognito:
+            QTimer.singleShot(3500, self._auto_check_updates)
+
+    def _auto_check_updates(self) -> None:
+        if self.incognito or not self.isVisible():
+            return
+        if not bool(self.settings.get("check_updates", True)):
+            return
+        now = time.time()
+        try:
+            last = float(self.settings.get("last_update_check", 0) or 0)
+        except (TypeError, ValueError):
+            last = 0.0
+        if now - last < 24 * 3600:
+            return
+        # Se marca el intento aunque falle la red: así no se repite la consulta
+        # en cada ventana o arranque del mismo día.
+        self.settings.set("last_update_check", now)
+        self._run_update_check(silent=True)
+
+    def check_updates(self) -> None:
+        self._run_update_check(silent=False)
+
+    def _run_update_check(self, *, silent: bool) -> None:
+        if self._update_checker is not None:
+            if not silent:
+                self.statusBar().showMessage("Ya se está comprobando…", 2500)
+            return
+
+        # QtNetwork solo se carga cuando hace falta comprobar.
+        from .updates import UpdateChecker
+
+        self._update_check_silent = silent
+        checker = UpdateChecker(__version__, self)
+        self._update_checker = checker
+        checker.update_available.connect(self._on_update_available)
+        checker.no_update.connect(self._on_update_not_available)
+        checker.failed.connect(self._on_update_failed)
+        if not silent:
+            self.statusBar().showMessage("Buscando actualizaciones…", 3000)
+        checker.check()
+
+    def _finish_update_check(self) -> None:
+        checker = self._update_checker
+        self._update_checker = None
+        if checker is not None:
+            checker.deleteLater()
+
+    def _on_update_available(self, version: str, url: str, notes: str) -> None:
+        silent = self._update_check_silent
+        self._finish_update_check()
+
+        if silent:
+            if self.settings.get("last_update_prompt") == version:
+                self.statusBar().showMessage(
+                    f"Actualización disponible: Pedrozilla {version}", 12000
+                )
+                return
+            # Avisa una sola vez por versión; el menú Ayuda siempre permite
+            # volver a comprobarlo manualmente.
+            self.settings.set("last_update_prompt", version)
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Actualización disponible")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(f"Hay una nueva versión de Pedrozilla: {version}")
+        box.setInformativeText(
+            f"Tienes la versión {__version__}. ¿Quieres abrir la página de descarga?"
+        )
+        if notes:
+            box.setDetailedText(notes)
+        open_button = box.addButton("Abrir descarga", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Más tarde", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is open_button:
+            self.open_url(url, new_tab=True)
+
+    def _on_update_not_available(self) -> None:
+        silent = self._update_check_silent
+        self._finish_update_check()
+        if silent:
+            self.statusBar().showMessage("Pedrozilla está actualizado", 4000)
+        else:
+            QMessageBox.information(
+                self,
+                "Actualizaciones",
+                f"Pedrozilla {__version__} es la última versión disponible.",
+            )
+
+    def _on_update_failed(self, message: str) -> None:
+        silent = self._update_check_silent
+        self._finish_update_check()
+        if silent:
+            self.statusBar().showMessage("No se pudo comprobar si hay actualizaciones", 5000)
+        else:
+            QMessageBox.warning(
+                self,
+                "Actualizaciones",
+                f"No se pudo comprobar si hay actualizaciones.\n\n{message}",
+            )
 
     def show_about(self) -> None:
         from .dialogs import AboutDialog

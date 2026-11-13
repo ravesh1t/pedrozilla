@@ -63,6 +63,25 @@ El instalador no pide Python ni administrador: instala en
 Vuelve a ejecutar ambos scripts cada vez que cambies el código: el `.exe` lleva
 dentro una copia del navegador del momento de compilarlo.
 
+**Linux** (paquete portátil y `.deb` autosuficientes):
+
+```bash
+./packaging/linux/build.sh 1.1.1
+# dist-linux/Pedrozilla-1.1.1-linux-x86_64.tar.gz
+# dist-linux/pedrozilla_1.1.1_amd64.deb
+```
+
+El `.tar.gz` se instala sin root con `./install.sh`; el `.deb` instala en
+`/opt/pedrozilla`. Ambos incluyen Qt WebEngine, así que no necesitan Python.
+
+## Actualizaciones
+
+Pedrozilla consulta una vez al día la última release publicada en
+[GitHub](https://github.com/ravesh1t/pedrozilla/releases) y avisa si hay una
+versión nueva. No envía telemetría ni descarga nada por su cuenta. También
+puedes comprobarlo a mano en *Ayuda → Buscar actualizaciones…* o desactivar la
+comprobación automática en *Ajustes → General*.
+
 ## Estructura
 
 ```
@@ -74,6 +93,7 @@ pedrozilla/
 ├── downloads.py         descargas: seguimiento, barra y diálogo
 ├── dialogs.py           historial, marcadores, ajustes y "acerca de"
 ├── extensions.py        extensiones Chromium (MV3)
+├── updates.py           comprobación de releases en GitHub
 ├── newtab.py            HTML de la página de nueva pestaña
 ├── newtab_bridge.py     puente Qt ↔ JavaScript de esa página
 ├── theme.py             temas clásico, oscuro y claro
