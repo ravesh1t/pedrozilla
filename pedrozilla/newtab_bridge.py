@@ -14,8 +14,11 @@ from PySide6.QtCore import QObject, Slot
 class NewTabBridge(QObject):
     """Operaciones que la nueva pestaña puede pedirle al navegador."""
 
-    def __init__(self, context) -> None:
-        super().__init__()
+    def __init__(self, context, parent: QObject | None = None) -> None:
+        # Con dueño, el puente vive exactamente lo que vive su pestaña. Antes no
+        # tenía padre y la ventana sobrescribía la referencia al abrir otra
+        # pestaña, dejando un QWebChannel apuntando a un objeto ya liberado.
+        super().__init__(parent)
         self._context = context
 
     # -- accesos rápidos ----------------------------------------------------

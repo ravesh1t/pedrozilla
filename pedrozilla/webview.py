@@ -83,13 +83,33 @@ class WebView(QWebEngineView):
         # setUrl(), así que lo seguimos nosotros para poder diferir acciones
         # (p. ej. guardar un marcador) hasta tener la URL y el título finales.
         self.nav_pending = False
+        # Conexiones que esta vista establece con la ventana. Se cortan al
+        # cerrar la pestaña para que ningún callback mantenga viva una vista
+        # ya descartada (antes acababan acumulándose al abrir/cerrar pestañas).
+        self._connections: list[tuple[object, object]] = []
 
         page = WebPage(profile, window=window, parent=self)
         self.setPage(page)
 
-        page.linkHovered.connect(self._on_link_hovered)
-        page.loadStarted.connect(self._on_nav_started)
-        page.loadFinished.connect(self._on_nav_finished)
+        self._connections.append(
+            (page.linkHovered, page.linkHovered.connect(self._on_link_hovered))
+        )
+        self._connections.append(
+            (page.loadStarted, page.loadStarted.connect(self._on_nav_started))
+        )
+        self._connections.append(
+            (page.loadFinished, page.loadFinished.connect(self._on_nav_finished))
+        )
+
+    def detach(self) -> None:
+        """Desconecta los callbacks de la ventana antes de destruir la vista."""
+        for signal, connection in self._connections:
+            try:
+                signal.disconnect(connection)  # type: ignore[attr-defined]
+            except (RuntimeError, TypeError):
+                pass
+        self._connections.clear()
+
 
     def _on_nav_started(self) -> None:
         self.nav_pending = True

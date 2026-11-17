@@ -387,9 +387,11 @@ class BrowserWindow(QMainWindow):
         strip_layout = QHBoxLayout(self.tab_strip)
         strip_layout.setContentsMargins(0, 0, 0, 0)
         strip_layout.setSpacing(0)
-        strip_layout.addWidget(self.tabs.tabBar(), 1)
+        # Que la barra ocupe solo lo que necesitan las pestañas: así el "+" queda
+        # justo a la derecha de la última, no pegado al borde de la ventana.
+        self.tabs.tabBar().setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
+        strip_layout.addWidget(self.tabs.tabBar())
 
-        # Botón "+" al final de la franja para crear pestañas (como Firefox).
         self.new_tab_button = QToolButton()
         self.new_tab_button.setObjectName("NewTabButton")
         self.new_tab_button.setText("+")
@@ -399,6 +401,7 @@ class BrowserWindow(QMainWindow):
         self.new_tab_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.new_tab_button.clicked.connect(self.new_tab_focused)
         strip_layout.addWidget(self.new_tab_button)
+        strip_layout.addStretch(1)
 
         layout.addWidget(self.tab_strip)
 
@@ -757,33 +760,45 @@ class BrowserWindow(QMainWindow):
         self._apply_page_settings(page)
         view.set_zoom(float(self.settings.get("default_zoom", 1.0)))
 
-        view.titleChanged.connect(lambda title, v=view: self._on_title_changed(v, title))
-        view.urlChanged.connect(lambda _url, v=view: self._on_url_changed(v))
-        view.iconChanged.connect(lambda _icon, v=view: self._on_icon_changed(v))
-        view.loadStarted.connect(lambda v=view: self._on_load_started(v))
-        view.loadProgress.connect(lambda value, v=view: self._on_load_progress(v, value))
-        view.loadFinished.connect(lambda ok, v=view: self._on_load_finished(v, ok))
-        view.status_hint.connect(self._on_status_hint)
+        def wire(signal, slot) -> None:
+            view._connections.append((signal, signal.connect(slot)))
+
+        wire(view.titleChanged, lambda title, v=view: self._on_title_changed(v, title))
+        wire(view.urlChanged, lambda _url, v=view: self._on_url_changed(v))
+        wire(view.iconChanged, lambda _icon, v=view: self._on_icon_changed(v))
+        wire(view.loadStarted, lambda v=view: self._on_load_started(v))
+        wire(view.loadProgress, lambda value, v=view: self._on_load_progress(v, value))
+        wire(view.loadFinished, lambda ok, v=view: self._on_load_finished(v, ok))
+        wire(view.status_hint, self._on_status_hint)
         view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        view.customContextMenuRequested.connect(lambda pos, v=view: self._show_context_menu(v, pos))
+        wire(view.customContextMenuRequested, lambda pos, v=view: self._show_context_menu(v, pos))
 
-        page.permissionRequested.connect(self._on_permission_requested)
-        page.fullScreenRequested.connect(self._on_fullscreen_requested)
-        page.windowCloseRequested.connect(lambda p=page: self._close_page_tab(p))
-        page.printRequested.connect(self.print_page)
-        page.authenticationRequired.connect(self._on_authentication_required)
-        page.findTextFinished.connect(lambda result, v=view: self._on_find_finished(v, result))
-        page.pdfPrintingFinished.connect(self._on_pdf_finished)
-        page.renderProcessTerminated.connect(
-            lambda status, code, v=view: self._on_render_terminated(v, status, code)
+        wire(page.permissionRequested, self._on_permission_requested)
+        wire(page.fullScreenRequested, self._on_fullscreen_requested)
+        wire(page.windowCloseRequested, lambda p=page: self._close_page_tab(p))
+        wire(page.printRequested, self.print_page)
+        wire(page.authenticationRequired, self._on_authentication_required)
+        wire(page.findTextFinished, lambda result, v=view: self._on_find_finished(v, result))
+        wire(page.pdfPrintingFinished, self._on_pdf_finished)
+        wire(
+            page.renderProcessTerminated,
+            lambda status, code, v=view: self._on_render_terminated(v, status, code),
         )
+        # El puente QWebChannel SOLO se crea para la página de nueva pestaña
+        # (ver `_ensure_new_tab_bridge`). Las páginas web normales no lo
+        # necesitan y antes pagaban el coste de un canal por pestaña abierta.
 
-        # Bridge para nueva pestaña
+    def _ensure_new_tab_bridge(self, view: WebView) -> None:
+        """Crea, una sola vez por vista, el canal que usa la nueva pestaña."""
+        if getattr(view, "_pedrozilla_channel", None) is not None:
+            return
         try:
-            self._bridge = NewTabBridge(self.context)
-            self._channel = QWebChannel(page)
-            self._channel.registerObject('pedrozilla', self._bridge)
-            page.setWebChannel(self._channel)
+            bridge = NewTabBridge(self.context, view)
+            channel = QWebChannel(view.web_page)
+            channel.registerObject("pedrozilla", bridge)
+            view.web_page.setWebChannel(channel)
+            view._pedrozilla_bridge = bridge
+            view._pedrozilla_channel = channel
         except Exception:
             pass
 
@@ -804,6 +819,7 @@ class BrowserWindow(QMainWindow):
         settings.setAttribute(attribute.FocusOnNavigationEnabled, False)
 
     def load_new_tab_page(self, view: WebView) -> None:
+        self._ensure_new_tab_bridge(view)
         html = new_tab_html(
             search_template=self.settings.search_template,
             engine_key=self.settings.get("search_engine", "duckduckgo"),
@@ -831,13 +847,16 @@ class BrowserWindow(QMainWindow):
 
         self.tabs.removeTab(index)
         if isinstance(view, WebView):
+            # Cortamos los callbacks y la carga antes de soltar la vista: así un
+            # tab que se cierra deja de consumir CPU de inmediato en lugar de
+            # esperar a que Qt procese el deleteLater.
+            view.detach()
+            view.web_page.triggerAction(QWebEnginePage.WebAction.Stop)
+            view.hide()
             view.deleteLater()
 
         if self.tabs.count() == 0:
-            if len(self.context.windows) <= 1:
-                self.new_tab()
-            else:
-                self.close()
+            self.close()
 
     def reopen_closed_tab(self) -> None:
         if not self.context.closed_tabs:
