@@ -2,7 +2,7 @@
 # Construye los paquetes Linux: instalador portátil (.tar.gz) y .deb.
 #
 # Uso:
-#   ./packaging/linux/build.sh 1.1.1
+#   ./packaging/linux/build.sh 1.1.2
 #
 # Requisitos: python3 con PyInstaller y PySide6, dpkg-deb, tar, gzip.
 set -euo pipefail
