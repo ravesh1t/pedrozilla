@@ -327,6 +327,169 @@ QTabWidget#DialogTabs QTabBar::tab { min-width: 90px; border-radius: 4px; margin
 """
 
 
+MODERN = """
+/* Pedrozilla Modern — gris carbón, blanco roto, azul suave y naranja de identidad. */
+QWidget {
+    background: #f6f5f2; color: #202327; font-size: 13px;
+    font-family: "Segoe UI", "Inter", system-ui, -apple-system, sans-serif;
+}
+QMainWindow, QDialog { background: #f6f5f2; }
+QToolTip { background: #202327; color: #f6f5f2; border: 0; border-radius: 6px; padding: 4px 8px; }
+
+/* --- Franja de pestañas y barra superior --- */
+QWidget#TabStrip { background: #e9e7e2; border-bottom: 1px solid #d9d6cf; }
+QTabWidget::pane { border: 0; }
+QTabBar { background: transparent; qproperty-drawBase: 0; }
+QTabBar::tab {
+    background: #dedbd4; color: #4b4f55; border: 0;
+    border-top-left-radius: 8px; border-top-right-radius: 8px;
+    padding: 8px 14px; margin-right: 3px; margin-top: 4px;
+    min-width: 110px; max-width: 240px;
+}
+QTabBar::tab:hover { background: #e8e5df; color: #202327; }
+QTabBar::tab:selected {
+    background: #f6f5f2; color: #202327; margin-top: 0; padding: 10px 16px 8px;
+    border-bottom: 2px solid #4a86d8;
+}
+QTabBar::close-button { __CLOSE_BUTTON__ width: 14px; height: 14px; }
+QTabBar QToolButton { border: 0; background: transparent; }
+QToolButton#NewTabButton {
+    background: transparent; border: 1px solid transparent; border-radius: 8px;
+    color: #5b6068; font-size: 18px; font-weight: 500; margin: 3px 5px;
+}
+QToolButton#NewTabButton:hover { background: #dedbd4; color: #202327; }
+QToolButton#NewTabButton:pressed { background: #d2cec6; }
+
+QToolBar {
+    background: #f6f5f2; border: 0; border-bottom: 1px solid #e3e0d9;
+    spacing: 4px; padding: 6px 8px;
+}
+QToolBar#BookmarksBar { background: #f0eee9; border-bottom: 1px solid #dedbd4; padding: 3px 8px; }
+QToolBar::separator { background: #d9d6cf; width: 1px; margin: 5px 7px; }
+
+/* --- Botones de herramientas y menú naranja --- */
+QToolButton {
+    background: transparent; border: 1px solid transparent; border-radius: 8px;
+    padding: 6px 9px; color: #3c4043;
+}
+QToolButton:hover { background: #e9e7e2; border-color: #d9d6cf; }
+QToolButton:pressed { background: #dedbd4; }
+QToolButton:checked { background: #e3ecf8; border-color: #b9d2ee; color: #1f4e86; }
+QToolButton:disabled { color: #a5a29c; }
+QToolButton#BookmarkButton { border-radius: 8px; padding: 4px 10px; max-width: 190px; }
+QToolButton#BookmarkButton:hover { background: #e9e7e2; border-color: #d9d6cf; }
+QToolButton#MenuButton {
+    background: #ef8b28; border: 1px solid #d97a17; border-radius: 8px;
+    color: #ffffff; font-weight: 600; padding: 6px 16px;
+}
+QToolButton#MenuButton:hover { background: #f79b3f; border-color: #e2841b; }
+QToolButton#MenuButton:pressed { background: #dd7d12; }
+
+/* --- Omnibox y campos --- */
+QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+    background: #ffffff; border: 1px solid #d9d6cf; border-radius: 8px;
+    padding: 7px 12px; color: #202327;
+    selection-background-color: #cfe0f5; selection-color: #1f4e86;
+}
+QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus,
+QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+    border: 1px solid #4a86d8; background: #ffffff;
+}
+QLineEdit#Omnibox { font-size: 14px; padding: 9px 14px; border-radius: 10px; }
+QLineEdit#FindInput { border-radius: 6px; padding: 5px 9px; }
+QComboBox::drop-down { border: 0; width: 20px; }
+QComboBox QAbstractItemView {
+    background: #ffffff; border: 1px solid #d9d6cf; border-radius: 8px;
+    selection-background-color: #e3ecf8; selection-color: #1f4e86;
+}
+
+QPushButton {
+    background: #ffffff; border: 1px solid #d9d6cf; border-radius: 8px;
+    padding: 7px 15px; min-width: 72px; color: #202327;
+}
+QPushButton:hover { background: #f0eee9; border-color: #c9c5bd; }
+QPushButton:pressed { background: #e4e1da; }
+QPushButton:default { background: #4a86d8; border-color: #3f74bc; color: #ffffff; font-weight: 600; }
+QPushButton:default:hover { background: #3f74bc; }
+QPushButton:disabled { color: #a5a29c; background: #efede8; }
+
+/* --- Menús (el QSS de Qt no admite box-shadow: el borde y el radio dan profundidad) --- */
+QMenuBar { background: #f6f5f2; border-bottom: 1px solid #e3e0d9; }
+QMenuBar::item { padding: 6px 12px; background: transparent; border-radius: 6px; }
+QMenuBar::item:selected { background: #e3ecf8; color: #1f4e86; }
+QMenu {
+    background: #ffffff; border: 1px solid #d9d6cf; border-radius: 10px;
+    padding: 7px;
+}
+QMenu#PedrozillaMainMenu { min-width: 230px; padding: 8px; }
+QMenu::item { padding: 7px 26px 7px 34px; border-radius: 6px; }
+QMenu::item:selected { background: #e3ecf8; color: #1f4e86; }
+QMenu::item:disabled { color: #a5a29c; }
+QMenu::icon { padding-left: 10px; }
+QMenu::separator { height: 1px; background: #e6e3dd; margin: 5px 10px; }
+QMenu::right-arrow { padding-right: 10px; }
+
+/* --- Tablas, listas y cabeceras --- */
+QHeaderView::section {
+    background: #f0eee9; border: 0; border-right: 1px solid #dedbd4;
+    border-bottom: 1px solid #d9d6cf; padding: 7px 9px; font-weight: 600;
+}
+QTableView, QTreeView, QListView {
+    background: #ffffff; alternate-background-color: #faf9f7;
+    border: 1px solid #e3e0d9; border-radius: 8px; gridline-color: #ece9e3;
+    selection-background-color: #e3ecf8; selection-color: #1f4e86;
+}
+QTableView::item:selected, QTreeView::item:selected, QListView::item:selected {
+    background: #e3ecf8; color: #1f4e86;
+}
+QTabWidget#DialogTabs QTabBar::tab {
+    min-width: 96px; border-radius: 8px; margin-right: 3px; padding: 8px 14px;
+}
+
+/* --- Progreso, estado, barras y scroll --- */
+QProgressBar {
+    background: #ffffff; border: 1px solid #d9d6cf; border-radius: 8px;
+    text-align: center; height: 10px; color: #3c4043;
+}
+QProgressBar::chunk { background: #4a86d8; border-radius: 7px; }
+QStatusBar { background: #f0eee9; color: #5b6068; border-top: 1px solid #e3e0d9; }
+QStatusBar::item { border: 0; }
+QScrollBar:vertical { background: transparent; width: 12px; margin: 0; }
+QScrollBar::handle:vertical { background: #c9c5bd; border-radius: 6px; min-height: 30px; }
+QScrollBar::handle:vertical:hover { background: #aaa69e; }
+QScrollBar:horizontal { background: transparent; height: 12px; }
+QScrollBar::handle:horizontal { background: #c9c5bd; border-radius: 6px; min-width: 30px; }
+QScrollBar::handle:horizontal:hover { background: #aaa69e; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+
+QLabel#PanelTitle { font-size: 15px; font-weight: 600; }
+QLabel#MutedHint { color: #6b7280; }
+QFrame#DownloadsBar { background: #f0eee9; border-top: 1px solid #dedbd4; }
+QFrame#FindBar { background: #f0eee9; border-top: 1px solid #dedbd4; }
+QWidget#NewTabBadge { background: #ffffff; border: 1px solid #e3e0d9; border-radius: 10px; }
+"""
+
+
+# Ajustes con barra lateral: se añade a todos los temas para que el diálogo
+# rediseñado sea consistente también en clásico, claro y oscuro.
+SETTINGS_SIDEBAR_CSS = """
+QListWidget#SettingsSidebar {
+    background: transparent; border: none; border-right: 1px solid #b9bec7;
+    outline: none; font-size: 13px;
+}
+QListWidget#SettingsSidebar::item {
+    padding: 9px 12px; margin: 1px 5px; border-radius: 8px;
+}
+QListWidget#SettingsSidebar::item:hover { background: rgba(127, 140, 160, 0.16); }
+QListWidget#SettingsSidebar::item:selected { background: #ef8b28; color: #ffffff; }
+QStackedWidget#DialogPages { background: transparent; }
+QLineEdit#SettingsSearch {
+    border: 1px solid #b9bec7; border-radius: 9px; padding: 9px 12px;
+}
+"""
+
+
 @lru_cache(maxsize=8)
 def stylesheet(theme: str, close_icon: str = "") -> str:
     """Devuelve la hoja de estilo del tema indicado.
@@ -339,6 +502,8 @@ def stylesheet(theme: str, close_icon: str = "") -> str:
         css = LIGHT
     elif theme == "classic":
         css = CLASSIC
+    elif theme == "modern":
+        css = MODERN
     else:
         css = DARK
 
@@ -347,4 +512,4 @@ def stylesheet(theme: str, close_icon: str = "") -> str:
         css = css.replace("__CLOSE_BUTTON__", f"image: url({close_icon.replace(chr(92), '/')});")
     else:
         css = css.replace("__CLOSE_BUTTON__", "image: none;")
-    return css
+    return css + SETTINGS_SIDEBAR_CSS

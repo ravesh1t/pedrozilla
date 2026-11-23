@@ -5,12 +5,15 @@ from __future__ import annotations
 import shutil
 import sys
 import time
+from urllib.parse import quote
 from functools import lru_cache
 from pathlib import Path
 
 from PySide6.QtCore import (
     QCoreApplication,
     QEvent,
+    QEasingCurve,
+    QPropertyAnimation,
     QSize,
     QStandardPaths,
     QStringListModel,
@@ -20,13 +23,24 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QDesktopServices,
+    QFont,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import (
     QWebEngineContextMenuRequest,
     QWebEngineDownloadRequest,
     QWebEnginePage,
     QWebEngineProfile,
+    QWebEngineScript,
     QWebEngineSettings,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -46,6 +60,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSizePolicy,
+    QSplitter,
     QTabWidget,
     QToolBar,
     QToolButton,
@@ -54,11 +69,22 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__
+from .reader import picture_in_picture_script, reader_script
 from .downloads import DownloadRow, DownloadsDialog, DownloadsManager
 from .extensions import ExtensionBridge, ExtensionsDialog, extension_manager
+from .icons import menu_icon
 from .newtab import new_tab_html
 from .newtab_bridge import NewTabBridge
-from .storage import Bookmarks, History, Session, Settings, Shortcuts, config_dir, data_dir
+from .storage import (
+    SEARCH_ENGINES,
+    Bookmarks,
+    History,
+    Session,
+    Settings,
+    Shortcuts,
+    config_dir,
+    data_dir,
+)
 from .utils import (
     color_for,
     decorate_user_agent,
@@ -72,6 +98,18 @@ from .utils import (
 from .webview import WebView
 
 BRAND = "Pedrozilla"
+
+# Colores de los grupos de pestañas. Se usan círculos de color en el título de
+# la pestaña: QTabBar no permite teñir el fondo de una pestaña concreta de forma
+# fiable con stylesheet, pero este indicador es visible en todos los temas.
+GROUP_DOTS = {
+    "rojo": "🔴",
+    "naranja": "🟠",
+    "amarillo": "🟡",
+    "verde": "🟢",
+    "azul": "🔵",
+    "morado": "🟣",
+}
 
 # Icono real del proyecto (un .ico de varios tamaños). Si falta, se dibuja uno.
 _ICON_FILE = Path(__file__).with_name("pedrozilla.ico")
@@ -177,6 +215,40 @@ def _draw_letter_icon(letter: str, color: str, size: int) -> QIcon:
     return QIcon(pixmap)
 
 
+class SplitView(QWidget):
+    """Dos vistas web independientes dentro de una misma pestaña.
+
+    Cada vista conserva su propio QWebEnginePage. Nunca se reutiliza una misma
+    instancia de QWebEngineView en dos contenedores.
+    """
+
+    def __init__(self, views: list[WebView], parent=None) -> None:
+        super().__init__(parent)
+        self.views = views
+        self._pinned = False
+        self._group_id: str | None = None
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self.splitter.setChildrenCollapsible(False)
+        for view in views:
+            self.splitter.addWidget(view)
+        self.splitter.setSizes([600, 600])
+        layout.addWidget(self.splitter)
+        for view in views:
+            view.installEventFilter(self)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (API de Qt)
+        if event.type() == QEvent.Type.FocusIn and obj in self.views:
+            parent = self.parent()
+            while parent is not None and not isinstance(parent, BrowserWindow):
+                parent = parent.parent()
+            if parent is not None:
+                parent._active_view = obj
+        return super().eventFilter(obj, event)
+
+
 class BrowserContext:
     """Estado compartido: ajustes, historial, marcadores, perfiles y ventanas."""
 
@@ -195,6 +267,7 @@ class BrowserContext:
         # Puente de extensiones (gestor Qt + estado activo persistido).
         self.extensions: ExtensionBridge | None = None
         self._attached_profiles: set[int] = set()
+        self._profiles: list[QWebEngineProfile] = []
 
     # -- perfiles -----------------------------------------------------------
     def build_persistent_profile(self) -> QWebEngineProfile:
@@ -279,10 +352,66 @@ class BrowserContext:
                 return token.split("/", 1)[1]
         return "desconocida"
 
+    @staticmethod
+    def _referrer_script_source() -> str:
+        return r"""
+(function(){
+  var policy = "__PZ_REFERRER__";
+  function apply(){
+    if (!document.head || document.querySelector('meta[name="referrer"]')) return;
+    var meta = document.createElement("meta");
+    meta.name = "referrer";
+    meta.content = policy;
+    document.head.appendChild(meta);
+  }
+  if (document.head) { apply(); return; }
+  var observer = new MutationObserver(function(){
+    if (document.head) { observer.disconnect(); apply(); }
+  });
+  observer.observe(document, {childList:true, subtree:true});
+})()
+"""
+
+    def build_referrer_script(self) -> QWebEngineScript:
+        valid = {
+            "no-referrer",
+            "same-origin",
+            "strict-origin",
+            "strict-origin-when-cross-origin",
+        }
+        policy = self.settings.get("privacy_referrer_policy", "strict-origin-when-cross-origin")
+        if policy not in valid:
+            policy = "strict-origin-when-cross-origin"
+        script = QWebEngineScript()
+        script.setName("pedrozilla-referrer")
+        script.setSourceCode(self._referrer_script_source().replace("__PZ_REFERRER__", policy))
+        script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+        script.setWorldId(QWebEngineScript.ScriptWorldId.ApplicationWorld)
+        script.setRunsOnSubFrames(True)
+        return script
+
+    def _install_referrer_script(self, profile: QWebEngineProfile) -> None:
+        scripts = profile.scripts()
+        for script in list(scripts.toList()):
+            if script.name() == "pedrozilla-referrer":
+                scripts.remove(script)
+        scripts.insert(self.build_referrer_script())
+
+    def apply_privacy_scripts(self) -> None:
+        """Vuelve a inyectar la política de referrer en todos los perfiles."""
+        for profile in self._profiles:
+            try:
+                self._install_referrer_script(profile)
+            except RuntimeError:
+                continue
+
     def configure_profile(self, profile: QWebEngineProfile) -> None:
         user_agent = self.settings.get("user_agent") or decorate_user_agent(self.default_user_agent)
         if user_agent:
             profile.setHttpUserAgent(user_agent)
+        if not any(existing is profile for existing in self._profiles):
+            self._profiles.append(profile)
+        self._install_referrer_script(profile)
         if id(profile) not in self._attached_profiles:
             self.downloads.attach(profile)
             self._attached_profiles.add(id(profile))
@@ -294,12 +423,20 @@ class BrowserContext:
         return profile
 
     # -- ventanas -----------------------------------------------------------
-    def open_window(self, incognito: bool = False, urls: list[str] | None = None) -> "BrowserWindow":
+    def open_window(
+        self,
+        incognito: bool = False,
+        urls: list[str] | None = None,
+        debug: bool = False,
+    ) -> "BrowserWindow":
         profile = self.new_off_the_record_profile() if incognito else self.persistent_profile
         first_normal_window = not incognito and not any(
             not existing.incognito for existing in self.windows
         )
         window = BrowserWindow(self, profile, incognito=incognito)
+        # Debe aplicarse antes de crear las pestañas iniciales: `_wire_view` lee
+        # este valor al conectar cada página.
+        window.debug_console = bool(debug)
         window.open_initial_tabs(list(urls or []))
         self.windows.append(window)
         if first_normal_window:
@@ -339,10 +476,32 @@ class BrowserWindow(QMainWindow):
         self._update_checker = None
         self._update_check_silent = True
 
+        # Las QAction de la antigua barra de menús se conservan como objetos
+        # reales (atajos y conexiones intactos) pero sus menús no se muestran.
+        self._legacy_actions: dict[tuple[str, str], QAction] = {}
+        self._legacy_menus: dict[str, QMenu] = {}
+
+        self._active_view: WebView | None = None
         self._devtools_view: QWebEngineView | None = None
         self._devtools_page: QWebEnginePage | None = None
         self._html_fullscreen = False
         self._cert_warned: set[str] = set()
+        self._cert_errors: dict[str, str] = {}
+        self.tab_groups: dict[str, dict] = (
+            {} if incognito else dict(self.context.session.data.get("groups", {}))
+        )
+        self.workspaces: dict[str, dict] = (
+            {} if incognito else dict(self.settings.get("workspaces", {}))
+        )
+        self.active_workspace = str(self.settings.get("active_workspace", "personal"))
+        if not self.workspaces:
+            self.workspaces[self.active_workspace] = {
+                "name": "Personal",
+                "color": "azul",
+                "tabs": [],
+                "groups": {},
+                "active": 0,
+            }
 
         self.setWindowIcon(brand_icon())
         self.resize(1280, 840)
@@ -504,6 +663,11 @@ class BrowserWindow(QMainWindow):
         for action in (self.action_back, self.action_forward, self.action_reload, self.action_home):
             self.toolbar.addWidget(self._toolbar_button(action))
 
+        self.security_label = QLabel("🔎")
+        self.security_label.setObjectName("SecurityIndicator")
+        self.security_label.setToolTip("Escribe una dirección o una búsqueda")
+        self.toolbar.addWidget(self.security_label)
+
         self.omnibox = QLineEdit()
         self.omnibox.setObjectName("Omnibox")
         self.omnibox.setPlaceholderText("Buscar o escribir una dirección")
@@ -513,6 +677,9 @@ class BrowserWindow(QMainWindow):
         self.omnibox.returnPressed.connect(self._navigate_from_omnibox)
         self.omnibox.installEventFilter(self)
 
+        self._completion_base: list[tuple[str, str]] = []
+        self._completion_targets: dict[str, str] = {}
+        self.omnibox.textEdited.connect(lambda _text: self._refresh_completions(force=True))
         self._completion_model = QStringListModel(self)
         self._completer = QCompleter(self._completion_model, self)
         self._completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
@@ -562,8 +729,23 @@ class BrowserWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.progress)
         self.statusBar().showMessage("Listo")
 
+    @staticmethod
+    def _action_key(text: str) -> str:
+        return text.replace("&", "").replace("…", "").strip()
+
+    def _register_action(self, container, text: str, action: QAction) -> None:
+        """Guarda la QAction original para reutilizarla en el menú Pedrozilla."""
+        section = (
+            container.title().replace("&", "") if isinstance(container, QMenu) else "Atajos"
+        )
+        self._legacy_actions[(section, self._action_key(text))] = action
+
     def _menu(self, title: str) -> QMenu:
-        return self.menuBar().addMenu(title)
+        """Menú contenedor que ya no se engancha en la QMenuBar visible."""
+        clean = title.replace("&", "")
+        menu = QMenu(clean, self)
+        self._legacy_menus[clean] = menu
+        return menu
 
     def _add(self, container, text: str, slot, shortcut: str | None = None) -> QAction:
         action = QAction(text, self)
@@ -571,6 +753,7 @@ class BrowserWindow(QMainWindow):
             action.setShortcut(QKeySequence(shortcut))
         action.triggered.connect(slot)
         container.addAction(action)
+        self._register_action(container, text, action)
         return action
 
     def _add_page_action(self, menu, text: str, web_action, shortcut=None) -> QAction:
@@ -579,10 +762,14 @@ class BrowserWindow(QMainWindow):
             action.setShortcut(QKeySequence(shortcut) if isinstance(shortcut, str) else QKeySequence(shortcut))
         action.triggered.connect(lambda: self.trigger_page_action(web_action))
         menu.addAction(action)
+        self._register_action(menu, text, action)
         return action
 
     def _build_menus(self) -> None:
+        # La barra clásica queda vacía y oculta: las acciones viven en menús
+        # propios y se reutilizan en el desplegable del botón naranja.
         self.menuBar().setNativeMenuBar(False)
+        self.menuBar().setVisible(False)
 
         file_menu = self._menu("&Archivo")
         self._add(file_menu, "Nueva pestaña", self.new_tab_focused, "Ctrl+T")
@@ -633,46 +820,112 @@ class BrowserWindow(QMainWindow):
         self.action_show_bookmarks.setShortcut(QKeySequence("Ctrl+Shift+B"))
         self.action_show_bookmarks.toggled.connect(self._toggle_bookmarks_bar)
         view_menu.addAction(self.action_show_bookmarks)
+        self._register_action(view_menu, "Barra de marcadores", self.action_show_bookmarks)
         self._add(view_menu, "Pantalla completa", self.toggle_fullscreen, "F11")
         view_menu.addSeparator()
-        self._add_page_action(view_menu, "Código fuente", QWebEnginePage.WebAction.ViewSource, "Ctrl+U")
-        self._add(view_menu, "Herramientas de desarrollo", self.open_devtools, "Ctrl+Shift+I")
+        self._add_page_action(view_menu, "Ver código fuente", QWebEnginePage.WebAction.ViewSource, "Ctrl+U")
+        self._add(view_menu, "DevTools", self.open_devtools, "Ctrl+Shift+I")
+        view_menu.addSeparator()
+        self._add(view_menu, "Modo lectura", self.toggle_reader_mode, "F9")
+        self._add(view_menu, "Vista dividida", self.toggle_split_view, "Alt+V")
+        self._add(view_menu, "Vídeo en ventana flotante (PiP)", self.toggle_picture_in_picture)
 
         history_menu = self._menu("&Historial")
         self._add(history_menu, "Atrás", self.go_back)
         self._add(history_menu, "Adelante", self.go_forward)
         self._add(history_menu, "Página de inicio", self.go_home)
         history_menu.addSeparator()
-        self._add(history_menu, "Mostrar historial", self.show_history, "Ctrl+H")
-        self._add(history_menu, "Reabrir última pestaña cerrada", self.reopen_closed_tab, "Ctrl+Shift+T")
+        self._add(history_menu, "Ver historial", self.show_history, "Ctrl+H")
+        self._add(history_menu, "Reabrir pestaña cerrada", self.reopen_closed_tab, "Ctrl+Shift+T")
+        self.closed_menu = QMenu("Pestañas cerradas recientemente", history_menu)
+        self.closed_menu.aboutToShow.connect(self._fill_closed_menu)
+        history_menu.addMenu(self.closed_menu)
         history_menu.addSeparator()
-        self._add(history_menu, "Borrar datos de navegación…", self.clear_browsing_data)
+        self._add(history_menu, "Borrar datos de navegación", self.clear_browsing_data)
 
         bookmarks_menu = self._menu("&Marcadores")
-        self._add(bookmarks_menu, "Guardar o quitar marcador", self.toggle_bookmark, "Ctrl+D")
-        self._add(bookmarks_menu, "Mostrar todos los marcadores", self.show_bookmarks_manager, "Ctrl+Shift+O")
+        self._add(bookmarks_menu, "Añadir marcador", self.toggle_bookmark, "Ctrl+D")
+        self._add(bookmarks_menu, "Administrar marcadores", self.show_bookmarks_manager, "Ctrl+Shift+O")
+        # Misma QAction que en «Ver»: un único estado compartido en dos secciones.
+        self._register_action(bookmarks_menu, "Barra de marcadores", self.action_show_bookmarks)
 
-        self._add(self._menu("&Descargas"), "Mostrar descargas", self.show_downloads, "Ctrl+J")
+        spaces_menu = self._menu("&Espacios")
+        spaces_menu.addMenu(self._workspace_menu())
+        self._add(spaces_menu, "Nuevo espacio…", self.new_workspace)
+
+        downloads_menu = self._menu("&Descargas")
+        self._add(downloads_menu, "Abrir gestor de descargas", self.show_downloads, "Ctrl+J")
+        self._add(downloads_menu, "Abrir carpeta de descargas", self.open_downloads_folder)
         settings_menu = self._menu("&Ajustes")
-        self._add(settings_menu, "Preferencias…", self.show_settings, "Ctrl+,")
-        self._add(settings_menu, "Extensiones…", self.show_extensions, "Ctrl+Shift+E")
+        self._add(settings_menu, "Ajustes", self.show_settings, "Ctrl+,")
+        self._add(settings_menu, "Extensiones", self.show_extensions, "Ctrl+Shift+E")
+        self._add(settings_menu, "Privacidad y seguridad", self.show_privacy)
         help_menu = self._menu("A&yuda")
-        self._add(help_menu, "Buscar actualizaciones…", self.check_updates)
+        self._add(help_menu, "Buscar actualizaciones", self.check_updates)
         help_menu.addSeparator()
         self._add(help_menu, f"Acerca de {BRAND}", self.show_about, "F1")
 
+    def _fill_closed_menu(self) -> None:
+        """Se rellena al abrirlo para no copiar la lista en cada cambio de pestaña."""
+        self.closed_menu.clear()
+        entries = list(reversed(self.context.closed_tabs))
+        if not entries:
+            action = self.closed_menu.addAction("No hay pestañas cerradas")
+            action.setEnabled(False)
+            return
+        for entry in entries:
+            title = truncate(entry.get("title") or entry.get("url") or "Pestaña", 52)
+            self.closed_menu.addAction(title, lambda item=entry: self.new_tab(item.get("url", "")))
+        self.closed_menu.addSeparator()
+        self._add(self.closed_menu, "Reabrir la última", self.reopen_closed_tab)
+
     def _build_shortcuts(self) -> None:
-        self._add(self, "Atrás", self.go_back, "Alt+Left")
-        self._add(self, "Adelante", self.go_forward, "Alt+Right")
-        self._add(self, "Pestaña siguiente", lambda: self._cycle_tab(1), "Ctrl+Tab")
-        self._add(self, "Pestaña anterior", lambda: self._cycle_tab(-1), "Ctrl+Shift+Tab")
-        for number in range(1, 9):
+        # Las acciones de menú ya tienen atajo y siguen activas con la barra de
+        # menús oculta: no se duplican aquí (Atrás, Adelante, Ctrl+Tab, F9…).
+        for number in range(1, 10):
             self._add(self, f"Pestaña {number}", lambda n=number - 1: self._focus_tab(n), f"Ctrl+{number}")
+        self._add(
+            self,
+            "Ir a la barra de direcciones",
+            lambda: (self.omnibox.setFocus(), self.omnibox.selectAll()),
+            "Ctrl+L, Alt+D",
+        )
+        self._add(self, "Recargar (F5)", self.reload_or_stop, "F5")
+        self._add(self, "Fijar o desfijar pestaña", lambda: self.toggle_pin_tab(), "Alt+P")
+        self._add(self, "Silenciar pestaña", lambda: self.toggle_mute_tab(), "Alt+M")
+        self._add(self, "Crear grupo de pestañas", lambda: self.create_group(), "Alt+G")
+        self._add(self, "Gestionar grupos", self._manage_groups, "Alt+Shift+G")
+        self._add(self, "Cambiar de espacio de trabajo", self._cycle_workspace, "Alt+W")
 
     # ------------------------------------------------------------- pestañas
     def current_view(self) -> WebView | None:
         widget = self.tabs.currentWidget()
-        return widget if isinstance(widget, WebView) else None
+        if isinstance(widget, WebView):
+            return widget
+        if isinstance(widget, SplitView):
+            active = self._active_view
+            if active is not None and active in widget.views:
+                return active
+            return widget.views[0] if widget.views else None
+        return None
+
+    def views_in_tab(self, index: int) -> list[WebView]:
+        widget = self.tabs.widget(index)
+        if isinstance(widget, WebView):
+            return [widget]
+        if isinstance(widget, SplitView):
+            return list(widget.views)
+        return []
+
+    def _tab_index_of_view(self, view: WebView) -> int:
+        index = self.tabs.indexOf(view)
+        if index >= 0:
+            return index
+        for position in range(self.tabs.count()):
+            widget = self.tabs.widget(position)
+            if isinstance(widget, SplitView) and view in widget.views:
+                return position
+        return -1
 
     def current_page(self) -> QWebEnginePage | None:
         view = self.current_view()
@@ -693,6 +946,11 @@ class BrowserWindow(QMainWindow):
             self.tabs.setCurrentIndex(max(0, min(active, self.tabs.count() - 1)))
         else:
             self.new_tab(focus=False, activate=False)
+
+        if not self.incognito:
+            self._restore_tab_metadata(
+                self.context.session.data.get("tabs", []) if not urls else []
+            )
 
         geometry = self.context.session.geometry()
         if geometry:
@@ -739,7 +997,7 @@ class BrowserWindow(QMainWindow):
         view = WebView(self.profile, window=self)
         self._wire_view(view)
 
-        index = self.tabs.addTab(view, "Nueva pestaña")
+        index = self.tabs.insertTab(self._pinned_count(), view, "Nueva pestaña")
         if activate and not background:
             self.tabs.setCurrentIndex(index)
 
@@ -773,6 +1031,7 @@ class BrowserWindow(QMainWindow):
         view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         wire(view.customContextMenuRequested, lambda pos, v=view: self._show_context_menu(v, pos))
 
+        wire(page.audioMutedChanged, lambda _muted, v=view: self._sync_titles(v))
         wire(page.permissionRequested, self._on_permission_requested)
         wire(page.fullScreenRequested, self._on_fullscreen_requested)
         wire(page.windowCloseRequested, lambda p=page: self._close_page_tab(p))
@@ -823,9 +1082,13 @@ class BrowserWindow(QMainWindow):
         html = new_tab_html(
             search_template=self.settings.search_template,
             engine_key=self.settings.get("search_engine", "duckduckgo"),
-            theme=self.settings.get("theme", "classic"),
+            theme=self.settings.get("theme", "modern"),
             shortcuts=self.context.shortcuts.items(),
-            accent=self.settings.get("accent", "#8ab4f8"),
+            history=[] if self.incognito else self.context.history.entries(),
+            newtab_prefs=self.settings.get("newtab_prefs", {}),
+            workspaces=self.workspaces,
+            active_workspace=self.active_workspace,
+            accent=self.settings.get("accent", "#ff7a32"),
             brand=BRAND,
             footer=(
                 "Ventana privada: no se guarda historial, cookies ni caché"
@@ -835,10 +1098,490 @@ class BrowserWindow(QMainWindow):
         )
         view.load_html_page(html)
 
+    def _pinned_count(self) -> int:
+        return sum(
+            1
+            for index in range(self.tabs.count())
+            if getattr(self.tabs.widget(index), "_pinned", False)
+        )
+
+    def _group_dot(self, group_id: str | None) -> str:
+        if not group_id:
+            return ""
+        color = self.tab_groups.get(group_id, {}).get("color", "azul")
+        return GROUP_DOTS.get(color, "🔵") + " "
+
+    def _tab_prefix(self, view: WebView) -> str:
+        prefix = self._group_dot(getattr(view, "_group_id", None))
+        if getattr(view, "_loading", False):
+            prefix += "◌ "
+        if getattr(view, "_pinned", False):
+            prefix += "📌 "
+        try:
+            if view.page() is not None and view.page().isAudioMuted():
+                prefix += "🔇 "
+        except RuntimeError:
+            pass
+        return prefix
+
+    def toggle_pin_tab(self, index: int | None = None) -> None:
+        """Fija o desfija la pestaña indicada (o la actual)."""
+        if index is None:
+            index = self.tabs.currentIndex()
+        widget = self.tabs.widget(index)
+        if not isinstance(widget, (WebView, SplitView)):
+            return
+        pinned = not getattr(widget, "_pinned", False)
+        widget._pinned = pinned
+        for view in self.views_in_tab(index):
+            view._pinned = pinned
+        if pinned and index != 0:
+            self.tabs.tabBar().moveTab(index, 0)
+            self.tabs.setCurrentIndex(0)
+        elif not pinned:
+            self.tabs.tabBar().moveTab(index, self._pinned_count())
+        self._refresh_group_titles()
+        self.statusBar().showMessage("Pestaña fijada" if pinned else "Pestaña desfijada", 2500)
+
+    def toggle_mute_tab(self, index: int | None = None) -> None:
+        """Silencia o reactiva el sonido de la pestaña indicada (o la actual)."""
+        if index is None:
+            index = self.tabs.currentIndex()
+        views = self.views_in_tab(index)
+        if not views:
+            return
+        view = self.current_view()
+        if view is None or view not in views:
+            view = views[0]
+        page = view.page()
+        page.setAudioMuted(not page.isAudioMuted())
+        self._sync_titles(view)
+        self.statusBar().showMessage(
+            "Pestaña silenciada" if page.isAudioMuted() else "Sonido activado", 2500
+        )
+
+    # --------------------------------------------------------------- grupos
+    def create_group(self, index: int | None = None) -> None:
+        if index is None:
+            index = self.tabs.currentIndex()
+        if not self.views_in_tab(index):
+            return
+        name, ok = QInputDialog.getText(self, "Nuevo grupo", "Nombre del grupo:")
+        if not ok or not name.strip():
+            return
+        names = list(GROUP_DOTS)
+        color, ok = QInputDialog.getItem(
+            self, "Nuevo grupo", "Color:", names, names.index("azul"), False
+        )
+        if not ok:
+            return
+        group_id = f"g{int(time.time() * 1000)}"
+        self.tab_groups[group_id] = {
+            "name": name.strip(),
+            "color": color if color in GROUP_DOTS else "azul",
+            "collapsed": False,
+        }
+        self._assign_group(index, group_id)
+        self.statusBar().showMessage(f"Grupo «{name.strip()}» creado", 3000)
+
+    def _assign_group(self, index: int, group_id: str | None) -> None:
+        widget = self.tabs.widget(index)
+        views = self.views_in_tab(index)
+        if not views:
+            return
+        widget._group_id = group_id
+        for view in views:
+            view._group_id = group_id
+        self._refresh_group_titles()
+        self._apply_group_visibility()
+
+    def _apply_group_visibility(self) -> None:
+        bar = self.tabs.tabBar()
+        for index in range(self.tabs.count()):
+            view = self.tabs.widget(index)
+            group_id = getattr(view, "_group_id", None)
+            hidden = bool(group_id and self.tab_groups.get(group_id, {}).get("collapsed"))
+            bar.setTabVisible(index, not hidden)
+
+        if self.tabs.count() and not any(bar.isTabVisible(i) for i in range(self.tabs.count())):
+            bar.setTabVisible(0, True)
+        if not bar.isTabVisible(self.tabs.currentIndex()):
+            for index in range(self.tabs.count()):
+                if bar.isTabVisible(index):
+                    self.tabs.setCurrentIndex(index)
+                    break
+
+    def _group_submenu(self, parent: QMenu, index: int) -> QMenu:
+        view = self.tabs.widget(index)
+        current = getattr(view, "_group_id", None) if isinstance(view, WebView) else None
+        submenu = QMenu("Grupo", parent)
+        submenu.addAction("Sin grupo", lambda: self._assign_group(index, None))
+        for group_id, info in self.tab_groups.items():
+            title = f"{self._group_dot(group_id)}{info.get('name', group_id)}"
+            action = submenu.addAction(title, lambda gid=group_id: self._assign_group(index, gid))
+            action.setCheckable(True)
+            action.setChecked(group_id == current)
+        submenu.addSeparator()
+        submenu.addAction("Crear grupo nuevo…", lambda: self.create_group(index))
+        return submenu
+
+    def _manage_groups(self) -> None:
+        menu = QMenu(self)
+        if not self.tab_groups:
+            action = menu.addAction("No hay grupos. Usa «Crear grupo nuevo…» en una pestaña.")
+            action.setEnabled(False)
+        for group_id, info in self.tab_groups.items():
+            title = f"{self._group_dot(group_id)}{info.get('name', group_id)}"
+            submenu = menu.addMenu(title)
+            collapsed = bool(info.get("collapsed"))
+            submenu.addAction(
+                "Expandir grupo" if collapsed else "Contraer grupo",
+                lambda gid=group_id: self._toggle_group_collapse(gid),
+            )
+            submenu.addAction(
+                "Renombrar…", lambda gid=group_id: self._rename_group(gid)
+            )
+            submenu.addAction(
+                "Cambiar color…", lambda gid=group_id: self._recolor_group(gid)
+            )
+            submenu.addSeparator()
+            submenu.addAction(
+                "Eliminar grupo (mantiene las pestañas)",
+                lambda gid=group_id: self._delete_group(gid),
+            )
+        menu.exec(self._menu_button.mapToGlobal(self._menu_button.rect().bottomLeft()))
+
+    def _toggle_group_collapse(self, group_id: str) -> None:
+        info = self.tab_groups.get(group_id)
+        if info is None:
+            return
+        info["collapsed"] = not info.get("collapsed", False)
+        self._apply_group_visibility()
+
+    def _rename_group(self, group_id: str) -> None:
+        info = self.tab_groups.get(group_id)
+        if info is None:
+            return
+        name, ok = QInputDialog.getText(
+            self, "Renombrar grupo", "Nombre:", text=str(info.get("name", ""))
+        )
+        if ok and name.strip():
+            info["name"] = name.strip()
+            self._refresh_group_titles()
+
+    def _recolor_group(self, group_id: str) -> None:
+        info = self.tab_groups.get(group_id)
+        if info is None:
+            return
+        names = list(GROUP_DOTS)
+        color, ok = QInputDialog.getItem(
+            self,
+            "Color del grupo",
+            "Color:",
+            names,
+            max(0, names.index(info.get("color", "azul")) if info.get("color") in names else 3),
+            False,
+        )
+        if ok and color in GROUP_DOTS:
+            info["color"] = color
+            self._refresh_group_titles()
+
+    def _delete_group(self, group_id: str) -> None:
+        self.tab_groups.pop(group_id, None)
+        for index in range(self.tabs.count()):
+            widget = self.tabs.widget(index)
+            if getattr(widget, "_group_id", None) == group_id:
+                widget._group_id = None
+            for view in self.views_in_tab(index):
+                if getattr(view, "_group_id", None) == group_id:
+                    view._group_id = None
+        self._refresh_group_titles()
+        self._apply_group_visibility()
+
+    def _refresh_group_titles(self) -> None:
+        for index in range(self.tabs.count()):
+            view = self.tabs.widget(index)
+            if isinstance(view, WebView):
+                self._sync_titles(view)
+
+    # ---------------------------------------------------- espacios de trabajo
+    def _persist_workspaces(self) -> None:
+        if self.incognito:
+            return
+        self.settings.set("workspaces", self.workspaces)
+        self.settings.set("active_workspace", self.active_workspace)
+
+    def _workspace_snapshot(self) -> dict:
+        tabs = []
+        for index in range(self.tabs.count()):
+            widget = self.tabs.widget(index)
+            views = self.views_in_tab(index)
+            entry = {"url": self._tab_url(index)}
+            entry["group"] = getattr(widget, "_group_id", None)
+            entry["pinned"] = bool(getattr(widget, "_pinned", False))
+            if isinstance(widget, SplitView):
+                entry["split_urls"] = [
+                    view.url_string() for view in views if not view.is_new_tab_page
+                ]
+            tabs.append(entry)
+        return {
+            "tabs": tabs,
+            "groups": dict(self.tab_groups),
+            "active": self.tabs.currentIndex(),
+        }
+
+    def _save_current_workspace(self) -> None:
+        if self.incognito:
+            return
+        self.workspaces.setdefault(
+            self.active_workspace,
+            {"name": self.active_workspace, "color": "azul", "tabs": [], "groups": {}, "active": 0},
+        )
+        self.workspaces[self.active_workspace].update(self._workspace_snapshot())
+
+    def _load_workspace_snapshot(self, snapshot: dict) -> None:
+        while self.tabs.count():
+            index = self.tabs.count() - 1
+            for view in self.views_in_tab(index):
+                self._dispose_view(view)
+            self.tabs.removeTab(index)
+        self._active_view = None
+        self.tab_groups = dict(snapshot.get("groups", {}))
+        entries = snapshot.get("tabs", [])
+        if not entries:
+            self.new_tab(focus=False, activate=False)
+            return
+
+        for entry in entries:
+            url = str(entry.get("url") or "")
+            self.new_tab(
+                url,
+                focus=False,
+                background=True,
+                activate=False,
+                load_newtab_page=not url,
+            )
+        self._restore_tab_metadata(entries)
+        for index, entry in enumerate(entries):
+            split_urls = entry.get("split_urls") or []
+            if not split_urls:
+                continue
+            if index < self.tabs.count() and not isinstance(self.tabs.widget(index), SplitView):
+                self.tabs.setCurrentIndex(index)
+                self.toggle_split_view()
+                container = self.tabs.widget(index)
+                if isinstance(container, SplitView) and len(split_urls) > 1 and len(container.views) > 1:
+                    container.views[1].load_input(split_urls[1])
+        target = int(snapshot.get("active") or 0)
+        self.tabs.setCurrentIndex(max(0, min(target, self.tabs.count() - 1)))
+        self._on_tab_changed(self.tabs.currentIndex())
+
+    def switch_workspace(self, key: str | None = None) -> None:
+        if self.incognito:
+            QMessageBox.information(
+                self, "Espacios de trabajo",
+                "Los espacios de trabajo no están disponibles en ventanas privadas.",
+            )
+            return
+        if key is None or key not in self.workspaces:
+            return
+        if key == self.active_workspace:
+            return
+        self._save_current_workspace()
+        self.active_workspace = key
+        self._persist_workspaces()
+        self._load_workspace_snapshot(self.workspaces[key])
+        info = self.workspaces[key]
+        dot = GROUP_DOTS.get(info.get("color", "azul"), "🔵")
+        self.statusBar().showMessage(f"Espacio de trabajo: {dot} {info.get('name', key)}", 4000)
+        self._update_window_title()
+
+    def new_workspace(self) -> None:
+        if self.incognito:
+            return
+        name, ok = QInputDialog.getText(self, "Nuevo espacio", "Nombre del espacio:")
+        if not ok or not name.strip():
+            return
+        colors = list(GROUP_DOTS)
+        color, ok = QInputDialog.getItem(
+            self, "Nuevo espacio", "Color:", colors, colors.index("verde"), False
+        )
+        key = f"ws{int(time.time() * 1000)}"
+        self.workspaces[key] = {
+            "name": name.strip(),
+            "color": color if color in GROUP_DOTS else "verde",
+            "tabs": [],
+            "groups": {},
+            "active": 0,
+        }
+        self.switch_workspace(key)
+
+    def rename_workspace(self, key: str) -> None:
+        info = self.workspaces.get(key)
+        if info is None:
+            return
+        name, ok = QInputDialog.getText(
+            self, "Renombrar espacio", "Nombre:", text=str(info.get("name", ""))
+        )
+        if ok and name.strip():
+            info["name"] = name.strip()
+            self._persist_workspaces()
+            self._update_window_title()
+
+    def recolor_workspace(self, key: str) -> None:
+        info = self.workspaces.get(key)
+        if info is None:
+            return
+        colors = list(GROUP_DOTS)
+        color, ok = QInputDialog.getItem(
+            self, "Color del espacio", "Color:", colors,
+            max(0, colors.index(info.get("color", "verde")) if info.get("color") in colors else 3),
+            False,
+        )
+        if ok and color in GROUP_DOTS:
+            info["color"] = color
+            self._persist_workspaces()
+            self._update_window_title()
+
+    def delete_workspace(self, key: str) -> None:
+        if len(self.workspaces) <= 1:
+            QMessageBox.information(self, "Espacios de trabajo", "Debe quedar al menos un espacio.")
+            return
+        answer = QMessageBox.question(
+            self, "Espacios de trabajo",
+            "¿Eliminar este espacio y sus pestañas guardadas?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.workspaces.pop(key, None)
+        if self.active_workspace == key:
+            self.active_workspace = next(iter(self.workspaces))
+            self._load_workspace_snapshot(self.workspaces[self.active_workspace])
+        self._persist_workspaces()
+        self._update_window_title()
+
+    def _workspace_menu(self) -> QMenu:
+        menu = QMenu("Espacios de trabajo", self)
+        for key, info in self.workspaces.items():
+            dot = GROUP_DOTS.get(info.get("color", "verde"), "🔵")
+            action = menu.addAction(
+                f"{dot} {info.get('name', key)}", lambda k=key: self.switch_workspace(k)
+            )
+            action.setCheckable(True)
+            action.setChecked(key == self.active_workspace)
+        menu.addSeparator()
+        menu.addAction("Nuevo espacio…", self.new_workspace)
+        if self.active_workspace in self.workspaces:
+            current = menu.addMenu("Espacio actual")
+            current.addAction("Renombrar…", lambda: self.rename_workspace(self.active_workspace))
+            current.addAction("Cambiar color…", lambda: self.recolor_workspace(self.active_workspace))
+            current.addAction("Eliminar…", lambda: self.delete_workspace(self.active_workspace))
+        return menu
+
+    def _cycle_workspace(self) -> None:
+        keys = list(self.workspaces)
+        if len(keys) < 2:
+            return
+        index = keys.index(self.active_workspace) if self.active_workspace in keys else 0
+        self.switch_workspace(keys[(index + 1) % len(keys)])
+
+    # --------------------------------------------------------- vista dividida
+    def _dispose_view(self, view: WebView) -> None:
+        view.detach()
+        view.web_page.triggerAction(QWebEnginePage.WebAction.Stop)
+        view.hide()
+        view.deleteLater()
+
+    def toggle_split_view(self) -> None:
+        """Divide la pestaña actual en dos vistas web independientes."""
+        index = self.tabs.currentIndex()
+        widget = self.tabs.widget(index)
+        if index < 0 or widget is None:
+            return
+
+        if isinstance(widget, SplitView):
+            keep = self._active_view if self._active_view in widget.views else widget.views[0]
+            for view in widget.views:
+                if view is not keep:
+                    self._dispose_view(view)
+            keep._pinned = bool(getattr(widget, "_pinned", False))
+            keep._group_id = getattr(widget, "_group_id", None)
+            label = self.tabs.tabText(index).replace("◫ ", "", 1)
+            tooltip = self.tabs.tabToolTip(index)
+            self.tabs.removeTab(index)
+            self.tabs.insertTab(index, keep, label)
+            self.tabs.setTabToolTip(index, tooltip)
+            self.tabs.setCurrentIndex(index)
+            self._active_view = keep
+            self._sync_titles(keep)
+            self.statusBar().showMessage("Vista dividida desactivada", 2500)
+            return
+
+        if not isinstance(widget, WebView):
+            return
+        right = WebView(self.profile, window=self)
+        self._wire_view(right)
+        right.set_zoom(float(self.settings.get("default_zoom", 1.0)))
+        container = SplitView([widget, right], self.tabs)
+        container._pinned = bool(getattr(widget, "_pinned", False))
+        container._group_id = getattr(widget, "_group_id", None)
+        label = "◫ " + self.tabs.tabText(index)
+        tooltip = self.tabs.tabToolTip(index)
+        self.tabs.removeTab(index)
+        self.tabs.insertTab(index, container, label)
+        self.tabs.setTabToolTip(index, tooltip)
+        self.tabs.setCurrentIndex(index)
+        self._active_view = right
+        self.load_new_tab_page(right)
+        right.setFocus()
+        self.statusBar().showMessage("Vista dividida: dos páginas independientes", 3000)
+
+    def _swap_split_views(self) -> None:
+        widget = self.tabs.widget(self.tabs.currentIndex())
+        if not isinstance(widget, SplitView) or len(widget.views) != 2:
+            return
+        left, right = widget.views
+        widget.splitter.insertWidget(0, right)
+        widget.views = [right, left]
+        self._active_view = right
+        self.statusBar().showMessage("Vistas intercambiadas", 2000)
+
+    def _close_split_side(self) -> None:
+        """Cierra la vista con foco y deja la otra como pestaña normal."""
+        widget = self.tabs.widget(self.tabs.currentIndex())
+        if not isinstance(widget, SplitView) or len(widget.views) != 2:
+            return
+        keep = self._active_view if self._active_view in widget.views else widget.views[0]
+        drop = widget.views[1] if keep is widget.views[0] else widget.views[0]
+        self._dispose_view(drop)
+        widget.views.remove(drop)
+        self.toggle_split_view()
+
+    def _restore_tab_metadata(self, entries: list[dict]) -> None:
+        for index, entry in enumerate(entries[: self.tabs.count()]):
+            view = self.tabs.widget(index)
+            if not isinstance(view, WebView):
+                continue
+            group_id = entry.get("group")
+            if group_id in self.tab_groups:
+                view._group_id = group_id
+            view._pinned = bool(entry.get("pinned"))
+            if entry.get("muted"):
+                view.web_page.setAudioMuted(True)
+            self._sync_titles(view)
+        self._apply_group_visibility()
+
     def close_tab(self, index: int) -> None:
         if index < 0 or index >= self.tabs.count():
             return
-        view = self.tabs.widget(index)
+        widget = self.tabs.widget(index)
+        if getattr(widget, "_pinned", False):
+            self.statusBar().showMessage("Desfija la pestaña antes de cerrarla", 3000)
+            return
+        views = self.views_in_tab(index)
+        view = views[0] if views else None
         if isinstance(view, WebView) and not view.is_new_tab_page:
             url = view.url_string()
             if is_web_url(url):
@@ -846,14 +1589,13 @@ class BrowserWindow(QMainWindow):
                 del self.context.closed_tabs[:-20]
 
         self.tabs.removeTab(index)
-        if isinstance(view, WebView):
-            # Cortamos los callbacks y la carga antes de soltar la vista: así un
-            # tab que se cierra deja de consumir CPU de inmediato en lugar de
-            # esperar a que Qt procese el deleteLater.
-            view.detach()
-            view.web_page.triggerAction(QWebEnginePage.WebAction.Stop)
-            view.hide()
-            view.deleteLater()
+        # Cortamos los callbacks y la carga antes de soltar cada vista: así un
+        # tab que se cierra deja de consumir CPU de inmediato en lugar de
+        # esperar a que Qt procese el deleteLater.
+        for view in views:
+            self._dispose_view(view)
+        if self._active_view in views:
+            self._active_view = None
 
         if self.tabs.count() == 0:
             self.close()
@@ -887,10 +1629,12 @@ class BrowserWindow(QMainWindow):
             self.tabs.setCurrentIndex(index)
 
     def _tab_url(self, index: int) -> str:
-        view = self.tabs.widget(index)
-        if isinstance(view, WebView) and not view.is_new_tab_page:
-            url = view.url_string()
-            return "" if url == "about:blank" else url
+        views = self.views_in_tab(index)
+        for view in views:
+            if not view.is_new_tab_page:
+                url = view.url_string()
+                if url and url != "about:blank":
+                    return url
         return ""
 
     # ------------------------------------------------- eventos de pestaña
@@ -917,12 +1661,12 @@ class BrowserWindow(QMainWindow):
         con la URL como valor provisional), así que al terminar cada carga se
         consulta `document.title`, que es la fuente fiable.
         """
-        index = self.tabs.indexOf(view)
+        index = self._tab_index_of_view(view)
         if index < 0:
             return
         raw = (dom_title or "").strip() or view.title().strip()
         text = raw or host_of(view.url_string()) or "Nueva pestaña"
-        self.tabs.setTabText(index, truncate(text, 26))
+        self.tabs.setTabText(index, self._tab_prefix(view) + truncate(text, 26))
         self.tabs.setTabToolTip(index, raw)
         if view is self.current_view():
             self._update_window_title()
@@ -947,7 +1691,7 @@ class BrowserWindow(QMainWindow):
             self._update_window_title()
 
     def _on_icon_changed(self, view: WebView) -> None:
-        index = self.tabs.indexOf(view)
+        index = self._tab_index_of_view(view)
         if index < 0:
             return
         icon = view.icon()
@@ -956,6 +1700,8 @@ class BrowserWindow(QMainWindow):
         self.tabs.setTabIcon(index, icon)
 
     def _on_load_started(self, view: WebView) -> None:
+        view._loading = True
+        self._sync_titles(view)
         if view is not self.current_view():
             return
         self.progress.setVisible(True)
@@ -969,6 +1715,7 @@ class BrowserWindow(QMainWindow):
             self.progress.setValue(value)
 
     def _on_load_finished(self, view: WebView, ok: bool) -> None:
+        view._loading = False
         self._sync_titles(view)
         if ok:
             # document.title solo hace falta si Qt aún no tiene un título real
@@ -1002,7 +1749,7 @@ class BrowserWindow(QMainWindow):
     def _on_render_terminated(self, view: WebView, status, code: int) -> None:
         if code == 0:
             return
-        index = self.tabs.indexOf(view)
+        index = self._tab_index_of_view(view)
         name = self.tabs.tabText(index) if index >= 0 else "pestaña"
         self.statusBar().showMessage(f"El proceso de «{name}» falló (código {code})", 8000)
 
@@ -1010,6 +1757,10 @@ class BrowserWindow(QMainWindow):
         view = self.current_view()
         title = view.title().strip() if view is not None else ""
         prefix = "Incógnito — " if self.incognito else ""
+        info = self.workspaces.get(self.active_workspace) if hasattr(self, "workspaces") else None
+        if info is not None and len(self.workspaces) > 1:
+            dot = GROUP_DOTS.get(info.get("color", "verde"), "🔵")
+            prefix = f"{dot} {info.get('name', self.active_workspace)} — {prefix}"
         self.setWindowTitle(f"{prefix}{title} · {BRAND}" if title else f"{prefix}{BRAND}")
 
     # -------------------------------------------------------------- omnibox
@@ -1017,6 +1768,15 @@ class BrowserWindow(QMainWindow):
         url = "" if view.is_new_tab_page else view.url_string()
         if url == "about:blank":
             url = ""
+        if url.startswith("https://"):
+            self.security_label.setText("🔒")
+            self.security_label.setToolTip("Conexión segura (HTTPS)")
+        elif url.startswith("http://"):
+            self.security_label.setText("⚠")
+            self.security_label.setToolTip("Conexión sin cifrar (HTTP)")
+        else:
+            self.security_label.setText("🔎")
+            self.security_label.setToolTip("Escribe una dirección o una búsqueda")
         if self.omnibox.text() == url:
             return
         self.omnibox.setText(url)
@@ -1059,38 +1819,69 @@ class BrowserWindow(QMainWindow):
                 self.load_new_tab_page(view)
         elif page in ("devtools", "inspect"):
             self.open_devtools()
+        elif page in ("reader", "lectura"):
+            self.toggle_reader_mode()
+        elif page in ("pip", "picture-in-picture"):
+            self.toggle_picture_in_picture()
+        elif page in ("privacy", "privacidad"):
+            self.show_privacy()
         else:
             self.statusBar().showMessage(
                 "Páginas internas: chrome://settings, chrome://history, "
-                "chrome://downloads, chrome://bookmarks, chrome://newtab, chrome://devtools",
+                "chrome://downloads, chrome://bookmarks, chrome://newtab, "
+                "chrome://devtools, chrome://reader, chrome://privacy",
                 8000,
             )
         return True
 
     def _completion_chosen(self, text: str) -> None:
-        self.omnibox.setText(text)
+        target = self._completion_targets.get(text, text)
+        self.omnibox.setText(target)
         self._navigate_from_omnibox()
 
     def _invalidate_completions(self) -> None:
         self._completions_dirty = True
 
-    def _refresh_completions(self) -> None:
-        if not self._completions_dirty:
-            return
-        values: list[str] = []
-        seen: set[str] = set()
-        for item in self.bookmarks.items():
-            url = str(item.get("url", ""))
-            if url and url not in seen:
-                seen.add(url)
-                values.append(url)
-        for entry in self.history.entries()[:600]:
-            url = str(entry.get("url", ""))
-            if url and url not in seen:
-                seen.add(url)
-                values.append(url)
+    def _refresh_completions(self, force: bool = False) -> None:
+        """Construye sugerencias con icono de tipo y destino real.
+
+        La lista base (marcadores + historial) solo se reconstruye cuando el
+        historial o los marcadores cambian. Al escribir se reutiliza y solo se
+        añade la sugerencia de búsqueda del motor activo.
+        """
+        if self._completions_dirty:
+            base: list[tuple[str, str]] = []
+            seen: set[str] = set()
+            for item in self.bookmarks.items():
+                url = str(item.get("url", ""))
+                if url and url not in seen:
+                    seen.add(url)
+                    title = str(item.get("title", "") or display_url(url))
+                    base.append((f"⭐ {title} — {display_url(url)}", url))
+            for entry in self.history.entries()[:600]:
+                url = str(entry.get("url", ""))
+                if url and url not in seen:
+                    seen.add(url)
+                    title = str(entry.get("title", "") or display_url(url))
+                    base.append((f"🕘 {title} — {display_url(url)}", url))
+            self._completion_base = base
+            self._completions_dirty = False
+
+        values = [display for display, _url in self._completion_base]
+        targets = {display: url for display, url in self._completion_base}
+
+        query = self.omnibox.text().strip()
+        if query and len(query) >= 2 and not is_web_url(query):
+            engine_key = self.settings.get("search_engine", "duckduckgo")
+            label, template = SEARCH_ENGINES.get(
+                engine_key, SEARCH_ENGINES["duckduckgo"]
+            )
+            display = f"🔎 Buscar en {label}: {query}"
+            values.insert(0, display)
+            targets[display] = template.replace("{query}", quote(query))
+
+        self._completion_targets = targets
         self._completion_model.setStringList(values)
-        self._completions_dirty = False
 
     # ------------------------------------------------------------ navegación
     def _update_nav_actions(self, view: WebView) -> None:
@@ -1347,6 +2138,12 @@ class BrowserWindow(QMainWindow):
     def show_downloads(self) -> None:
         DownloadsDialog(self.downloads, self).exec()
 
+    def open_downloads_folder(self) -> None:
+        """Abre la carpeta de descargas con la aplicación del sistema."""
+        folder = self.settings.download_path
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
     # ---------------------------------------------------------------- ajustes
     def show_settings(self) -> None:
         from .dialogs import SettingsDialog
@@ -1376,8 +2173,77 @@ class BrowserWindow(QMainWindow):
             manager = self.context.extensions.manager
         ExtensionsDialog(manager, self.context.extensions, self).exec()
 
+    # ------------------------------------------------------- lectura / PiP / privacidad
+    def toggle_reader_mode(self) -> None:
+        """Muestra u oculta una versión de solo lectura de la página actual."""
+        view = self.current_view()
+        if view is None:
+            self.statusBar().showMessage("Abre una página para usar el modo lectura", 3000)
+            return
+        theme = "dark" if self.settings.get("theme", "modern") in ("modern", "dark") else "light"
+        script = reader_script(
+            font_size=int(self.settings.get("reader_font_size", 19)),
+            width=int(self.settings.get("reader_width", 720)),
+            theme=theme,
+        )
+
+        def done(result) -> None:
+            if result == "no-article":
+                self.statusBar().showMessage(
+                    "No se ha podido identificar un artículo en esta página", 5000
+                )
+            elif result == "ok":
+                self.statusBar().showMessage("Modo lectura activado. Pulsa Esc para salir.", 4000)
+            elif result == "closed":
+                self.statusBar().showMessage("Modo lectura desactivado", 2500)
+
+        try:
+            view.page().runJavaScript(script, done)
+        except Exception:
+            self.statusBar().showMessage("No se pudo activar el modo lectura", 4000)
+
+    def toggle_picture_in_picture(self) -> None:
+        """Solicita el PiP nativo de Chromium para el primer vídeo de la página.
+
+        Qt WebEngine no expone una API de PiP: solo se puede pedir desde la
+        propia página con `requestPictureInPicture()`. Chromium controla la
+        ventana flotante, por lo que Pedrozilla no puede moverla ni
+        redimensionarla desde Qt. Si la página no tiene vídeo o el navegador
+        rechaza la solicitud, se informa en la barra de estado.
+        """
+        view = self.current_view()
+        if view is None:
+            return
+
+        def done(result) -> None:
+            messages = {
+                "sin-video": "Esta página no contiene vídeo",
+                "no-soportado": "Esta página o este motor no permiten Picture in Picture",
+                "salir": "Se ha cerrado el vídeo flotante",
+                "ok": "Vídeo en ventana flotante (controlada por Chromium)",
+            }
+            if isinstance(result, str) and result.startswith("error:"):
+                messages[result] = "Chromium rechazó Picture in Picture: " + result[7:]
+            self.statusBar().showMessage(messages.get(str(result), str(result)), 5000)
+
+        try:
+            view.page().runJavaScript(picture_in_picture_script(), done)
+        except Exception:
+            self.statusBar().showMessage("No se pudo solicitar Picture in Picture", 4000)
+
+    def show_privacy(self) -> None:
+        """Abre el centro de privacidad del sitio actual."""
+        from .dialogs import PrivacyDialog
+
+        view = self.current_view()
+        url = view.url_string() if view is not None else ""
+        origin = QUrl(url).host() if url else ""
+        cert_info = self._cert_errors.get(origin, "") if hasattr(self, "_cert_errors") else ""
+        PrivacyDialog(self.profile, self.settings, url, cert_info, self).exec()
+
     def apply_settings(self, reload_needed: bool = False) -> None:
         apply_theme(QApplication.instance(), self.settings.get("theme", "classic"))
+        self.context.apply_privacy_scripts()
         self.ignore_certificate_errors = bool(self.settings.get("ignore_certificate_errors"))
         self.action_show_bookmarks.setChecked(bool(self.settings.get("show_bookmarks_bar")))
         if not self.incognito:
@@ -1389,11 +2255,9 @@ class BrowserWindow(QMainWindow):
 
         zoom = float(self.settings.get("default_zoom", 1.0))
         for index in range(self.tabs.count()):
-            view = self.tabs.widget(index)
-            if not isinstance(view, WebView):
-                continue
-            self._apply_page_settings(view.page())
-            view.set_zoom(zoom)
+            for view in self.views_in_tab(index):
+                self._apply_page_settings(view.page())
+                view.set_zoom(zoom)
             if view.is_new_tab_page:
                 self.load_new_tab_page(view)
             elif reload_needed:
@@ -1404,39 +2268,161 @@ class BrowserWindow(QMainWindow):
         answer = QMessageBox.question(
             self,
             "Borrar datos de navegación",
-            "Se borrarán cookies, caché e historial de este perfil.\n¿Continuar?",
+            "Se borrarán cookies, caché, historial y el almacenamiento local "
+            "de las páginas abiertas de este perfil.\n¿Continuar?",
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
         self.profile.cookieStore().deleteAllCookies()
         self.profile.clearHttpCache()
         self.history.clear()
-        self.statusBar().showMessage("Datos de navegación borrados", 4000)
+
+        # Qt WebEngine no expone una API para vaciar localStorage de todos los
+        # orígenes. Sí podemos limpiar el de las páginas abiertas desde la propia
+        # página; el resto se elimina del directorio «Local Storage» del perfil.
+        for index in range(self.tabs.count()):
+            for view in self.views_in_tab(index):
+                try:
+                    view.page().runJavaScript("try{localStorage.clear()}catch(e){}")
+                except RuntimeError:
+                    pass
+        if not self.incognito:
+            storage = Path(self.profile.persistentStoragePath()) / "Local Storage"
+            shutil.rmtree(storage, ignore_errors=True)
+
+        self.statusBar().showMessage(
+            "Datos de navegación borrados. Recarga las páginas abiertas para ver el cambio.",
+            6000,
+        )
 
     # ------------------------------------------------- menús contextuales
-    def _show_main_menu(self) -> None:
-        menu = QMenu(self)
-        menu.addAction("Nueva pestaña", self.new_tab_focused, "Ctrl+T")
-        menu.addAction("Nueva ventana", lambda: self.context.open_window(), "Ctrl+N")
-        menu.addAction(
-            "Nueva ventana privada", lambda: self.context.open_window(incognito=True), "Ctrl+Shift+N"
-        )
-        menu.addSeparator()
-        menu.addAction("Historial", self.show_history, "Ctrl+H")
-        menu.addAction("Marcadores", self.show_bookmarks_manager, "Ctrl+Shift+O")
-        menu.addAction("Descargas", self.show_downloads, "Ctrl+J")
-        menu.addSeparator()
-        menu.addAction("Buscar en la página…", self.open_find_bar, "Ctrl+F")
-        menu.addAction("Aumentar zoom", lambda: self.change_zoom(0.1))
-        menu.addAction("Reducir zoom", lambda: self.change_zoom(-0.1))
-        menu.addAction("Pantalla completa", self.toggle_fullscreen, "F11")
-        menu.addSeparator()
-        menu.addAction("Herramientas de desarrollo", self.open_devtools, "Ctrl+Shift+I")
-        menu.addAction("Ajustes", self.show_settings, "Ctrl+,")
-        menu.addAction(f"Acerca de {BRAND}", self.show_about)
-        menu.addSeparator()
-        menu.addAction("Salir", self.close_all_windows, "Ctrl+Q")
+    def _reused_action(self, section: str, text: str) -> QAction:
+        """Devuelve la QAction original: conserva señales, atajos y estados."""
+        action = self._legacy_actions.get((section, self._action_key(text)))
+        if action is None:  # Fallback visible si una acción cambió de nombre.
+            action = QAction(text, self)
+            action.setEnabled(False)
+        return action
+
+    def _add_reused(self, menu, section: str, text: str, glyph: str | None = None) -> QAction:
+        action = self._reused_action(section, text)
+        action.setIcon(menu_icon(text))
+        return menu.addAction(action)
+
+    @staticmethod
+    def _fade_in_menu(menu: QMenu) -> None:
+        """Apertura sutil: fundido de opacidad sin dependencias externas."""
+        menu.setWindowOpacity(1.0)
+        # Algunas plataformas (p. ej. la plataforma offscreen de pruebas) no
+        # soportan opacidad de ventana: animarlas provoca bucles de actualización.
+        menu.setWindowOpacity(0.5)
+        supported = abs(menu.windowOpacity() - 0.5) < 1e-6
+        menu.setWindowOpacity(1.0)
+        if not supported:
+            return
+        try:
+            animation = QPropertyAnimation(menu, b"windowOpacity", menu)
+            animation.setDuration(130)
+            animation.setStartValue(0.0)
+            animation.setEndValue(1.0)
+            animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            menu.setWindowOpacity(0.0)
+            animation.start()
+        except (RuntimeError, TypeError, AttributeError):
+            menu.setWindowOpacity(1.0)
+
+    def _exec_main_menu(self, menu: QMenu) -> None:
+        self._fade_in_menu(menu)
         menu.exec(self._menu_button.mapToGlobal(self._menu_button.rect().bottomLeft()))
+
+    def _show_main_menu(self) -> None:
+        """Muestra el menú del botón naranja."""
+        self._exec_main_menu(self._build_main_menu())
+
+    def _build_main_menu(self) -> QMenu:
+        """Construye el menú reutilizando las QAction de la barra oculta."""
+        menu = QMenu(self)
+        menu.setObjectName("PedrozillaMainMenu")
+        icon = menu_icon
+
+        def add(section: str, text: str, glyph: str) -> QAction:
+            return self._add_reused(menu, section, text, glyph)
+
+        menu.addSection("ARCHIVO")
+        add("Archivo", "Nueva pestaña", "SP_FileIcon")
+        add("Archivo", "Nueva ventana", "SP_FileDialogNewFolder")
+        add("Archivo", "Nueva ventana privada", "SP_ComputerIcon")
+        menu.addSeparator()
+        add("Archivo", "Abrir archivo local", "SP_DialogOpenButton")
+        add("Archivo", "Guardar página como", "SP_DialogSaveButton")
+        add("Archivo", "Guardar como PDF", "SP_DialogSaveButton")
+        add("Archivo", "Imprimir", "SP_DialogPrintButton")
+        menu.addSeparator()
+        add("Archivo", "Cerrar pestaña", "SP_DialogCloseButton")
+        add("Archivo", "Salir", "SP_DialogCloseButton")
+
+        menu.addSection("EDITAR")
+        add("Editar", "Deshacer", "SP_ArrowBack")
+        add("Editar", "Rehacer", "SP_ArrowForward")
+        menu.addSeparator()
+        add("Editar", "Cortar", "SP_DialogDiscardButton")
+        add("Editar", "Copiar", "SP_FileIcon")
+        add("Editar", "Pegar", "SP_DialogApplyButton")
+        add("Editar", "Seleccionar todo", "SP_FileDialogContentsView")
+        menu.addSeparator()
+        add("Editar", "Buscar en la página", "SP_FileDialogInfoView")
+
+        menu.addSection("VER")
+        add("Ver", "Recargar", "SP_BrowserReload")
+        add("Ver", "Recargar sin caché", "SP_BrowserReload")
+        add("Ver", "Detener", "SP_BrowserStop")
+        zoom = menu.addMenu(icon("Zoom"), "Zoom")
+        self._add_reused(zoom, "Ver", "Aumentar zoom", "SP_ArrowUp")
+        self._add_reused(zoom, "Ver", "Reducir zoom", "SP_ArrowDown")
+        self._add_reused(zoom, "Ver", "Zoom original", "SP_DialogResetButton")
+        add("Ver", "Pantalla completa", "SP_TitleBarMaxButton")
+        add("Ver", "Barra de marcadores", "SP_DialogResetButton")
+        add("Ver", "Ver código fuente", "SP_FileDialogContentsView")
+        add("Ver", "DevTools", "SP_FileDialogDetailedView")
+        more = menu.addMenu(icon("Más"), "Más")
+        self._add_reused(more, "Ver", "Modo lectura", "SP_FileIcon")
+        self._add_reused(more, "Ver", "Vista dividida", "SP_FileDialogDetailedView")
+        self._add_reused(more, "Ver", "Vídeo en ventana flotante (PiP)", "SP_MessageBoxInformation")
+
+        menu.addSection("HISTORIAL")
+        add("Historial", "Ver historial", "SP_ArrowBack")
+        add("Historial", "Reabrir pestaña cerrada", "SP_FileDialogNewFolder")
+        navigation = menu.addMenu(icon("Navegación"), "Navegación")
+        self._add_reused(navigation, "Historial", "Atrás", "SP_ArrowBack")
+        self._add_reused(navigation, "Historial", "Adelante", "SP_ArrowForward")
+        self._add_reused(navigation, "Historial", "Página de inicio", "SP_DirHomeIcon")
+        self.closed_menu.menuAction().setIcon(icon("Pestañas cerradas recientemente"))
+        menu.addMenu(self.closed_menu)
+        add("Historial", "Borrar datos de navegación", "SP_DialogDiscardButton")
+
+        menu.addSection("MARCADORES")
+        add("Marcadores", "Añadir marcador", "SP_FileIcon")
+        add("Marcadores", "Administrar marcadores", "SP_DirIcon")
+        add("Marcadores", "Barra de marcadores", "SP_DialogResetButton")
+
+        menu.addSection("DESCARGAS")
+        add("Descargas", "Abrir gestor de descargas", "SP_DialogSaveButton")
+        add("Descargas", "Abrir carpeta de descargas", "SP_DirOpenIcon")
+
+        menu.addSection("HERRAMIENTAS")
+        workspaces = self._workspace_menu()
+        workspaces.menuAction().setIcon(icon("Espacios de trabajo"))
+        menu.addMenu(workspaces)
+        add("Atajos", "Gestionar grupos", "SP_FileDialogDetailedView")
+        add("Ajustes", "Extensiones", "SP_FileDialogContentsView")
+        add("Ajustes", "Ajustes", "SP_ComputerIcon")
+        add("Ajustes", "Privacidad y seguridad", "SP_MessageBoxInformation")
+
+        menu.addSection("AYUDA")
+        add("Ayuda", "Buscar actualizaciones", "SP_MessageBoxInformation")
+        add("Ayuda", f"Acerca de {BRAND}", "SP_MessageBoxQuestion")
+
+        return menu
 
     def _show_tab_menu(self, pos) -> None:
         bar = self.tabs.tabBar()
@@ -1445,9 +2431,34 @@ class BrowserWindow(QMainWindow):
         if index < 0:
             menu.addAction("Nueva pestaña", self.new_tab_focused)
             menu.addAction("Reabrir pestaña cerrada", self.reopen_closed_tab)
+            menu.addSeparator()
+            menu.addAction("Gestionar grupos de pestañas…", self._manage_groups)
         else:
+            menu.addMenu(self._group_submenu(menu, index))
+            menu.addSeparator()
             menu.addAction("Recargar", lambda: self._reload_tab(index))
             menu.addAction("Duplicar", lambda: self.new_tab(self._tab_url(index)))
+            is_split = isinstance(self.tabs.widget(index), SplitView)
+            menu.addAction(
+                "Unir vista dividida" if is_split else "Dividir vista",
+                self.toggle_split_view,
+            )
+            if is_split:
+                menu.addAction("Intercambiar vistas", self._swap_split_views)
+                menu.addAction("Cerrar vista con foco", self._close_split_side)
+            menu.addSeparator()
+            menu.addAction(
+                "Desfijar pestaña" if getattr(self.tabs.widget(index), "_pinned", False)
+                else "Fijar pestaña",
+                lambda: self.toggle_pin_tab(index),
+            )
+            views = self.views_in_tab(index)
+            page = views[0].page() if views else None
+            mute_action = menu.addAction(
+                "Activar sonido" if page is not None and page.isAudioMuted() else "Silenciar pestaña",
+                lambda: self.toggle_mute_tab(index),
+            )
+            mute_action.setEnabled(page is not None)
             menu.addSeparator()
             menu.addAction("Cerrar", lambda: self.close_tab(index))
             menu.addAction("Cerrar las demás", lambda: self._close_other_tabs(index))
@@ -1455,8 +2466,7 @@ class BrowserWindow(QMainWindow):
         menu.exec(bar.mapToGlobal(pos))
 
     def _reload_tab(self, index: int) -> None:
-        view = self.tabs.widget(index)
-        if isinstance(view, WebView):
+        for view in self.views_in_tab(index):
             view.reload()
 
     def _close_other_tabs(self, index: int) -> None:
@@ -1672,6 +2682,7 @@ class BrowserWindow(QMainWindow):
             return
         self._cert_warned.add(url)
         description = error.description() if hasattr(error, "description") else ""
+        self._cert_errors[QUrl(url).host()] = f"{url}\n{description}".strip()
         QMessageBox.warning(
             self,
             "Certificado no válido",
@@ -1732,7 +2743,8 @@ class BrowserWindow(QMainWindow):
 
     def _set_chrome_visible(self, visible: bool) -> None:
         self.toolbar.setVisible(visible)
-        self.menuBar().setVisible(visible)
+        # La QMenuBar permanece oculta también en pantalla completa.
+        self.menuBar().setVisible(False)
         self.statusBar().setVisible(visible)
         self.bookmarks_bar.setVisible(
             visible and bool(self.settings.get("show_bookmarks_bar"))
@@ -1874,18 +2886,44 @@ class BrowserWindow(QMainWindow):
     def _save_session(self) -> None:
         if self.incognito:
             return
-        tabs = [{"url": self._tab_url(index)} for index in range(self.tabs.count())]
+        tabs = []
+        for index in range(self.tabs.count()):
+            widget = self.tabs.widget(index)
+            views = self.views_in_tab(index)
+            entry = {"url": self._tab_url(index)}
+            entry["group"] = getattr(widget, "_group_id", None)
+            entry["pinned"] = bool(getattr(widget, "_pinned", False))
+            entry["split"] = isinstance(widget, SplitView)
+            if isinstance(widget, SplitView):
+                entry["split_urls"] = [
+                    view.url_string() for view in views if not view.is_new_tab_page
+                ]
+            if views:
+                try:
+                    entry["muted"] = bool(
+                        views[0].page() is not None and views[0].page().isAudioMuted()
+                    )
+                except RuntimeError:
+                    entry["muted"] = False
+            tabs.append(entry)
         self.context.session.save(
             tabs=tabs,
             active=self.tabs.currentIndex(),
             geometry=bytes(self.saveGeometry()),
             maximized=self.isMaximized(),
+            groups=self.tab_groups,
         )
 
     def closeEvent(self, event) -> None:  # noqa: N802 (API de Qt)
         # El historial se escribe con retardo; al cerrar no debe perderse.
         self.context.history.flush()
-        if not self.incognito:
+        # La sesión describe una sola ventana. Solo la escribe la última
+        # ventana normal abierta: si varias guardaran, la que se cerrara antes
+        # sobrescribiría el estado de las demás.
+        last_normal = not self.incognito and sum(
+            1 for window in self.context.windows if not window.incognito
+        ) == 1
+        if last_normal:
             self._save_session()
         if self._devtools_view is not None:
             self._devtools_view.close()

@@ -66,10 +66,9 @@ def main(argv: list[str] | None = None) -> int:
 
     urls = [url for url in args.urls if url]
     if args.incognito:
-        window = context.open_window(incognito=True, urls=urls)
+        context.open_window(incognito=True, urls=urls, debug=bool(args.debug))
     else:
-        window = context.open_window(urls=urls)
-    window.debug_console = bool(args.debug)
+        context.open_window(urls=urls, debug=bool(args.debug))
 
     return app.exec()
 

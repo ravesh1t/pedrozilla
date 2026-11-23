@@ -6,6 +6,7 @@ Qt WebEngine expone este objeto por `QWebChannel` y el JavaScript lo usa como
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from PySide6.QtCore import QObject, Slot
@@ -50,6 +51,25 @@ class NewTabBridge(QObject):
     @Slot(result="QVariantList")
     def getHistory(self) -> list[dict[str, Any]]:
         return self._context.history.entries()
+
+    # -- nueva pestaña ------------------------------------------------------
+    @Slot(result=str)
+    def getNewTabPrefs(self) -> str:
+        """Preferencias de la nueva pestaña, persistidas en settings.json."""
+        prefs = self._context.settings.get("newtab_prefs", {})
+        return json.dumps(prefs or {}, ensure_ascii=False)
+
+    @Slot(str, result=bool)
+    def setNewTabPrefs(self, payload: str) -> bool:
+        """Guarda las preferencias de la nueva pestaña como JSON."""
+        try:
+            prefs = json.loads(payload or "{}")
+        except (TypeError, ValueError):
+            return False
+        if not isinstance(prefs, dict):
+            return False
+        self._context.settings.set("newtab_prefs", prefs)
+        return True
 
     # -- sugerencias --------------------------------------------------------
     @Slot(str, int, result="QStringList")

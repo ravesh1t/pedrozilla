@@ -5,7 +5,8 @@ from __future__ import annotations
 import time
 from typing import Any, Callable
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QTimer, Qt
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QTimer, Qt, QUrl
+from PySide6.QtWebEngineCore import QWebEnginePermission
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -19,6 +20,8 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QStackedWidget,
     QMessageBox,
     QPushButton,
     QTableView,
@@ -299,19 +302,93 @@ class SettingsDialog(QDialog):
         self.settings = settings
         self._clear_data = clear_data
 
-        self.setWindowTitle("Ajustes")
-        self.resize(620, 460)
+        self.setWindowTitle("Ajustes de Pedrozilla")
+        self.resize(840, 580)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        tabs = QTabWidget()
-        tabs.setObjectName("DialogTabs")
-        tabs.addTab(self._general_tab(), "General")
-        tabs.addTab(self._appearance_tab(), "Apariencia")
-        tabs.addTab(self._advanced_tab(), "Avanzado")
-        layout.addWidget(tabs, 1)
+        search_row = QHBoxLayout()
+        search_icon = QLabel("🔎")
+        self.search_box = QLineEdit()
+        self.search_box.setObjectName("SettingsSearch")
+        self.search_box.setPlaceholderText("Buscar ajustes…")
+        self.search_box.setClearButtonEnabled(True)
+        search_row.addWidget(search_icon)
+        search_row.addWidget(self.search_box, 1)
+        layout.addLayout(search_row)
+
+        body = QHBoxLayout()
+        body.setSpacing(14)
+        self.category_list = QListWidget()
+        self.category_list.setObjectName("SettingsSidebar")
+        self.category_list.setFixedWidth(196)
+        self.category_list.currentRowChanged.connect(self._show_category)
+        body.addWidget(self.category_list)
+
+        self.pages = QStackedWidget()
+        self.pages.setObjectName("DialogPages")
+        body.addWidget(self.pages, 1)
+        layout.addLayout(body, 1)
+
+        self._add_category("General", self._general_tab())
+        self._add_category("Apariencia", self._appearance_tab())
+        self._add_category("Página de inicio", self._info_page(
+            "Página de inicio",
+            [
+                "La nueva pestaña incluye reloj, fecha, saludo, buscador, accesos "
+                "directos y nota rápida.",
+                "Pulsa el botón ⚙ de la esquina superior derecha para elegir el "
+                "fondo, la distribución, el tamaño del reloj y los widgets visibles.",
+                "Los accesos se pueden reordenar arrastrándolos y se guardan en "
+                "el perfil local.",
+            ],
+        ))
+        self._add_category("Pestañas", self._info_page(
+            "Pestañas",
+            [
+                "Clic derecho sobre una pestaña: fijar, silenciar, agrupar, "
+                "duplicar o dividir la vista.",
+                "Alt+P fija o desfija · Alt+M silencia · Alt+G crea un grupo · "
+                "Alt+Shift+G gestiona los grupos.",
+                "Alt+V divide la pestaña actual en dos vistas independientes. "
+                "El historial ofrece una lista de pestañas cerradas.",
+            ],
+        ))
+        self._add_category("Búsqueda", self._search_tab())
+        self._add_category("Privacidad y seguridad", self._privacy_tab())
+        self._add_category("Descargas", self._downloads_tab())
+        self._add_category("Extensiones", self._info_page(
+            "Extensiones",
+            [
+                "Pedrozilla admite extensiones Manifest V3 en perfiles normales.",
+                "Pulsa Ctrl+Shift+E o usa Ajustes → Extensiones para instalarlas "
+                "y gestionarlas.",
+                "Las ventanas privadas no cargan extensiones.",
+            ],
+        ))
+        self._add_category("Espacios de trabajo", self._info_page(
+            "Espacios de trabajo",
+            [
+                "Cada espacio guarda sus pestañas, grupos y color identificativo.",
+                "Usa el menú Espacios o Alt+W para cambiar de espacio sin perder "
+                "los demás.",
+                "Los espacios no están disponibles en ventanas privadas.",
+            ],
+        ))
+        self._add_category("Avanzado", self._advanced_tab())
+        self._add_category("Acerca de Pedrozilla", self._info_page(
+            "Acerca de Pedrozilla",
+            [
+                f"{APP_NAME} es un navegador local basado en Chromium (Qt WebEngine).",
+                "Sin cuentas, sin sincronización obligatoria y sin telemetría.",
+                "Licencia MIT. Consulta el menú Ayuda para ver la versión exacta.",
+            ],
+        ))
+
+        self.search_box.textChanged.connect(self._filter_settings)
+        self.category_list.setCurrentRow(0)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -320,19 +397,79 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    # -- pestañas -----------------------------------------------------------
+    # -- páginas -------------------------------------------------------------
+    def _add_category(self, title: str, page: QWidget) -> None:
+        self.category_list.addItem(title)
+        self.pages.addWidget(page)
+
+    def _info_page(self, title: str, lines: list[str]) -> QWidget:
+        page = QWidget()
+        form = QVBoxLayout(page)
+        form.setSpacing(10)
+        heading = QLabel(title)
+        heading.setObjectName("PanelTitle")
+        form.addWidget(heading)
+        for line in lines:
+            label = QLabel(line)
+            label.setWordWrap(True)
+            form.addWidget(label)
+        form.addStretch(1)
+        return page
+
+    def _show_category(self, row: int) -> None:
+        if row >= 0:
+            self.pages.setCurrentIndex(row)
+
+    @staticmethod
+    def _page_rows(page: QWidget) -> list[list[QWidget]]:
+        """Agrupa cada etiqueta con el control siguiente para poder filtrarlos."""
+        layout = page.layout()
+        if layout is None:
+            return []
+        rows: list[list[QWidget]] = []
+        current: list[QWidget] = []
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            widget = item.widget()
+            if widget is None and item.layout() is not None:
+                sub = item.layout()
+                widget = sub.itemAt(0).widget() if sub.count() else None
+            if widget is None:
+                continue
+            current.append(widget)
+            if isinstance(widget, (QComboBox, QLineEdit, QCheckBox, QDoubleSpinBox, QPushButton)):
+                rows.append(current)
+                current = []
+        if current:
+            rows.append(current)
+        return rows
+
+    def _filter_settings(self, text: str) -> None:
+        query = text.strip().lower()
+        for row_index in range(self.pages.count()):
+            page = self.pages.widget(row_index)
+            visible_rows = 0
+            for widgets in self._page_rows(page):
+                content = " ".join(
+                    widget.text().lower()
+                    for widget in widgets
+                    if hasattr(widget, "text")
+                )
+                visible = not query or query in content
+                for widget in widgets:
+                    widget.setVisible(visible)
+                visible_rows += int(visible)
+            self.category_list.item(row_index).setHidden(bool(query) and visible_rows == 0)
+            if query and visible_rows == 0 and self.category_list.currentRow() == row_index:
+                for index in range(self.category_list.count()):
+                    if not self.category_list.item(index).isHidden():
+                        self.category_list.setCurrentRow(index)
+                        break
+
     def _general_tab(self) -> QWidget:
         page = QWidget()
         form = QVBoxLayout(page)
         form.setSpacing(10)
-
-        form.addWidget(QLabel("Motor de búsqueda de la barra de direcciones"))
-        self.engine = QComboBox()
-        for key, (label, _template) in SEARCH_ENGINES.items():
-            self.engine.addItem(label, key)
-        index = self.engine.findData(self.settings.get("search_engine"))
-        self.engine.setCurrentIndex(max(0, index))
-        form.addWidget(self.engine)
 
         form.addWidget(QLabel("Página de inicio (vacío = página de nueva pestaña)"))
         self.homepage = QLineEdit(self.settings.get("homepage", ""))
@@ -347,6 +484,41 @@ class SettingsDialog(QDialog):
         self.startup.setCurrentIndex(max(0, self.startup.findData(self.settings.get("startup"))))
         form.addWidget(self.startup)
 
+        self.check_updates = QCheckBox("Buscar actualizaciones automáticamente en GitHub")
+        self.check_updates.setChecked(bool(self.settings.get("check_updates", True)))
+        form.addWidget(self.check_updates)
+
+        form.addStretch(1)
+        return page
+
+    def _search_tab(self) -> QWidget:
+        page = QWidget()
+        form = QVBoxLayout(page)
+        form.setSpacing(10)
+
+        form.addWidget(QLabel("Motor de búsqueda de la barra de direcciones"))
+        self.engine = QComboBox()
+        for key, (label, _template) in SEARCH_ENGINES.items():
+            self.engine.addItem(label, key)
+        index = self.engine.findData(self.settings.get("search_engine"))
+        self.engine.setCurrentIndex(max(0, index))
+        form.addWidget(self.engine)
+
+        note = QLabel(
+            "También puedes cambiar el motor desde el buscador de la nueva "
+            "pestaña. La elección se guarda en el perfil local."
+        )
+        note.setWordWrap(True)
+        note.setObjectName("MutedHint")
+        form.addWidget(note)
+        form.addStretch(1)
+        return page
+
+    def _downloads_tab(self) -> QWidget:
+        page = QWidget()
+        form = QVBoxLayout(page)
+        form.setSpacing(10)
+
         form.addWidget(QLabel("Carpeta de descargas"))
         row = QHBoxLayout()
         self.download_dir = QLineEdit(self.settings.get("download_dir", ""))
@@ -360,11 +532,66 @@ class SettingsDialog(QDialog):
         self.ask_dir = QCheckBox("Preguntar dónde guardar cada archivo")
         self.ask_dir.setChecked(bool(self.settings.get("ask_download_dir")))
         form.addWidget(self.ask_dir)
+        form.addStretch(1)
+        return page
 
-        self.check_updates = QCheckBox("Buscar actualizaciones automáticamente en GitHub")
-        self.check_updates.setChecked(bool(self.settings.get("check_updates", True)))
-        form.addWidget(self.check_updates)
+    def _privacy_tab(self) -> QWidget:
+        page = QWidget()
+        form = QVBoxLayout(page)
+        form.setSpacing(10)
 
+        self.javascript = QCheckBox("Permitir JavaScript")
+        self.javascript.setChecked(bool(self.settings.get("javascript")))
+        form.addWidget(self.javascript)
+
+        self.ignore_certs = QCheckBox("Ignorar errores de certificado (¡inseguro!)")
+        self.ignore_certs.setChecked(bool(self.settings.get("ignore_certificate_errors")))
+        form.addWidget(self.ignore_certs)
+
+        form.addWidget(QLabel("Política de referrer entre sitios"))
+        self.referrer_policy = QComboBox()
+        for label, value in (
+            ("Estricta (recomendada)", "strict-origin-when-cross-origin"),
+            ("Solo origen estricto", "strict-origin"),
+            ("Solo el mismo sitio", "same-origin"),
+            ("Ninguna referencia", "no-referrer"),
+        ):
+            self.referrer_policy.addItem(label, value)
+        self.referrer_policy.setCurrentIndex(
+            max(0, self.referrer_policy.findData(self.settings.get("privacy_referrer_policy")))
+        )
+        form.addWidget(self.referrer_policy)
+
+        self.dns_prefetch = QCheckBox("Permitir resolución DNS anticipada")
+        self.dns_prefetch.setChecked(bool(self.settings.get("privacy_dns_prefetch")))
+        form.addWidget(self.dns_prefetch)
+
+        self.hyperlink_auditing = QCheckBox("Permitir auditoría de enlaces (ping)")
+        self.hyperlink_auditing.setChecked(bool(self.settings.get("privacy_hyperlink_auditing")))
+        form.addWidget(self.hyperlink_auditing)
+
+        self.insecure_geolocation = QCheckBox("Permitir geolocalización en sitios HTTP")
+        self.insecure_geolocation.setChecked(bool(self.settings.get("privacy_insecure_geolocation")))
+        form.addWidget(self.insecure_geolocation)
+
+        self.local_remote_urls = QCheckBox("Permitir que archivos locales accedan a la red")
+        self.local_remote_urls.setChecked(bool(self.settings.get("privacy_local_remote_urls")))
+        form.addWidget(self.local_remote_urls)
+
+        warning = QLabel(
+            "El centro de privacidad (menú Ajustes) permite revisar permisos, "
+            "borrar cookies y consultar el estado de los certificados del sitio actual. "
+            "Qt WebEngine no expone la cabecera Do Not Track ni una API directa de "
+            "referrer: la política se aplica mediante una etiqueta meta local."
+        )
+        warning.setObjectName("MutedHint")
+        warning.setWordWrap(True)
+        form.addWidget(warning)
+
+        if self._clear_data is not None:
+            clear = QPushButton("Borrar datos de navegación (cookies, caché, historial)…")
+            clear.clicked.connect(self._clear_data)
+            form.addWidget(clear)
         form.addStretch(1)
         return page
 
@@ -375,6 +602,7 @@ class SettingsDialog(QDialog):
 
         form.addWidget(QLabel("Tema de la interfaz"))
         self.theme = QComboBox()
+        self.theme.addItem("Moderno (Pedrozilla Modern)", "modern")
         self.theme.addItem("Clásico (Firefox 7)", "classic")
         self.theme.addItem("Oscuro", "dark")
         self.theme.addItem("Claro", "light")
@@ -394,6 +622,22 @@ class SettingsDialog(QDialog):
         self.zoom.setValue(float(self.settings.get("default_zoom", 1.0)) * 100)
         form.addWidget(self.zoom)
 
+        form.addWidget(QLabel("Tamaño de letra del modo lectura (px)"))
+        self.reader_font = QDoubleSpinBox()
+        self.reader_font.setRange(12, 36)
+        self.reader_font.setSingleStep(1)
+        self.reader_font.setDecimals(0)
+        self.reader_font.setValue(float(self.settings.get("reader_font_size", 19)))
+        form.addWidget(self.reader_font)
+
+        form.addWidget(QLabel("Ancho del texto en modo lectura (px)"))
+        self.reader_width_box = QDoubleSpinBox()
+        self.reader_width_box.setRange(480, 1400)
+        self.reader_width_box.setSingleStep(20)
+        self.reader_width_box.setDecimals(0)
+        self.reader_width_box.setValue(float(self.settings.get("reader_width", 720)))
+        form.addWidget(self.reader_width_box)
+
         form.addStretch(1)
         return page
 
@@ -407,16 +651,9 @@ class SettingsDialog(QDialog):
         self.user_agent.setPlaceholderText("Mozilla/5.0 …")
         form.addWidget(self.user_agent)
 
-        self.javascript = QCheckBox("Permitir JavaScript")
-        self.javascript.setChecked(bool(self.settings.get("javascript")))
-        form.addWidget(self.javascript)
-
-        self.ignore_certs = QCheckBox("Ignorar errores de certificado (¡inseguro!)")
-        self.ignore_certs.setChecked(bool(self.settings.get("ignore_certificate_errors")))
-        form.addWidget(self.ignore_certs)
-
         warning = QLabel(
-            "Cambiar el user agent y JavaScript requiere recargar las pestañas abiertas."
+            "Cambiar el user agent requiere recargar las pestañas abiertas. "
+            "JavaScript y los certificados se ajustan en «Privacidad y seguridad»."
         )
         warning.setObjectName("MutedHint")
         warning.setWordWrap(True)
@@ -453,9 +690,18 @@ class SettingsDialog(QDialog):
         self.theme.setCurrentIndex(max(0, self.theme.findData(DEFAULT_SETTINGS["theme"])))
         self.show_bookmarks.setChecked(DEFAULT_SETTINGS["show_bookmarks_bar"])
         self.zoom.setValue(DEFAULT_SETTINGS["default_zoom"] * 100)
+        self.reader_font.setValue(DEFAULT_SETTINGS["reader_font_size"])
+        self.reader_width_box.setValue(DEFAULT_SETTINGS["reader_width"])
         self.user_agent.setText(DEFAULT_SETTINGS["user_agent"])
         self.javascript.setChecked(DEFAULT_SETTINGS["javascript"])
         self.ignore_certs.setChecked(DEFAULT_SETTINGS["ignore_certificate_errors"])
+        self.referrer_policy.setCurrentIndex(
+            max(0, self.referrer_policy.findData(DEFAULT_SETTINGS["privacy_referrer_policy"]))
+        )
+        self.dns_prefetch.setChecked(DEFAULT_SETTINGS["privacy_dns_prefetch"])
+        self.hyperlink_auditing.setChecked(DEFAULT_SETTINGS["privacy_hyperlink_auditing"])
+        self.insecure_geolocation.setChecked(DEFAULT_SETTINGS["privacy_insecure_geolocation"])
+        self.local_remote_urls.setChecked(DEFAULT_SETTINGS["privacy_local_remote_urls"])
 
     def values(self) -> dict[str, Any]:
         return {
@@ -468,9 +714,16 @@ class SettingsDialog(QDialog):
             "theme": self.theme.currentData(),
             "show_bookmarks_bar": self.show_bookmarks.isChecked(),
             "default_zoom": round(self.zoom.value() / 100, 2),
+            "reader_font_size": int(self.reader_font.value()),
+            "reader_width": int(self.reader_width_box.value()),
             "user_agent": self.user_agent.text().strip(),
             "javascript": self.javascript.isChecked(),
             "ignore_certificate_errors": self.ignore_certs.isChecked(),
+            "privacy_referrer_policy": self.referrer_policy.currentData(),
+            "privacy_dns_prefetch": self.dns_prefetch.isChecked(),
+            "privacy_hyperlink_auditing": self.hyperlink_auditing.isChecked(),
+            "privacy_insecure_geolocation": self.insecure_geolocation.isChecked(),
+            "privacy_local_remote_urls": self.local_remote_urls.isChecked(),
         }
 
 
@@ -490,6 +743,13 @@ ABOUT_KEYS = [
     ("Ctrl++ / Ctrl+- / Ctrl+0", "Zoom"),
     ("Ctrl+Shift+I", "Herramientas de desarrollo"),
     ("Ctrl+Shift+P", "Imprimir / guardar como PDF"),
+    ("Ctrl+Shift+E", "Gestor de extensiones"),
+    ("Ctrl+,", "Preferencias"),
+    ("F9", "Modo lectura"),
+    ("Alt+V", "Vista dividida"),
+    ("Alt+P / Alt+M", "Fijar / silenciar pestaña"),
+    ("Alt+G / Alt+Shift+G", "Crear / gestionar grupos de pestañas"),
+    ("Alt+W", "Cambiar de espacio de trabajo"),
     ("F11", "Pantalla completa"),
     ("Ctrl+Tab", "Siguiente pestaña"),
     ("Ctrl+1…9", "Ir a la pestaña n"),
@@ -537,3 +797,213 @@ class AboutDialog(QDialog):
         buttons.rejected.connect(self.reject)
         buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
+
+
+class PrivacyDialog(QDialog):
+    """Centro de privacidad del sitio actual.
+
+    Solo muestra controles que Qt WebEngine expone de verdad. Cuando una API no
+    existe (por ejemplo, enumerar cookies), se indica la limitación en lugar de
+    mostrar un indicador de protección fingido.
+    """
+
+    def __init__(
+        self,
+        profile,
+        settings,
+        url: str,
+        cert_info: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.profile = profile
+        self.settings = settings
+        self.url = url or ""
+        self.setWindowTitle("Centro de privacidad")
+        self.resize(580, 620)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
+        title = QLabel("Centro de privacidad")
+        title.setObjectName("PanelTitle")
+        layout.addWidget(title)
+
+        origin = QUrl(self.url)
+        host = origin.host() if origin.isValid() else ""
+        site = host or self.url or "Página local"
+        layout.addWidget(QLabel(f"<b>Sitio:</b> {site}"))
+
+        # -- Permisos reales del origen -------------------------------------
+        perm_title = QLabel("Permisos del sitio")
+        perm_title.setObjectName("PanelTitle")
+        layout.addWidget(perm_title)
+
+        self.perm_rows: list[tuple[QWebEnginePermission, QLabel]] = []
+        permissions = []
+        try:
+            permissions = list(self.profile.listPermissionsForOrigin(origin)) if host else []
+        except Exception:
+            permissions = []
+
+        if not permissions:
+            empty = QLabel(
+                "No hay permisos concedidos o denegados guardados para este origen. "
+                "Cámara, micrófono, notificaciones y ubicación se solicitarán cuando "
+                "la página lo pida."
+            )
+            empty.setWordWrap(True)
+            layout.addWidget(empty)
+        for permission in permissions:
+            row = QHBoxLayout()
+            name = QLabel(self._permission_name(permission.permissionType()))
+            name.setMinimumWidth(180)
+            state = QLabel(self._state_name(permission.state()))
+            state.setMinimumWidth(70)
+            row.addWidget(name)
+            row.addWidget(state, 1)
+            for text, action in (
+                ("Permitir", permission.grant),
+                ("Denegar", permission.deny),
+                ("Restablecer", permission.reset),
+            ):
+                button = QPushButton(text)
+                button.clicked.connect(lambda _checked=False, fn=action, lbl=state: self._apply_permission(fn, lbl))
+                row.addWidget(button)
+            layout.addLayout(row)
+            self.perm_rows.append((permission, state))
+
+        # -- JavaScript ------------------------------------------------------
+        js_title = QLabel("Contenido y scripts")
+        js_title.setObjectName("PanelTitle")
+        layout.addWidget(js_title)
+        self.js_check = QCheckBox("Permitir JavaScript")
+        self.js_check.setChecked(bool(self.settings.get("javascript", True)))
+        self.js_check.toggled.connect(self._toggle_javascript)
+        layout.addWidget(self.js_check)
+        hint = QLabel("El cambio se aplica a las páginas que se abran a partir de ahora.")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        # -- Cookies y almacenamiento ---------------------------------------
+        storage_title = QLabel("Cookies y almacenamiento local")
+        storage_title.setObjectName("PanelTitle")
+        layout.addWidget(storage_title)
+        limit = QLabel(
+            "Qt WebEngine no expone una API para enumerar las cookies de un sitio. "
+            "Puedes borrarlas todas o solo las de sesión con los botones siguientes."
+        )
+        limit.setWordWrap(True)
+        layout.addWidget(limit)
+
+        cookie_row = QHBoxLayout()
+        session_button = QPushButton("Borrar cookies de sesión")
+        session_button.clicked.connect(self._delete_session_cookies)
+        all_button = QPushButton("Borrar todas las cookies")
+        all_button.clicked.connect(self._delete_all_cookies)
+        cookie_row.addWidget(session_button)
+        cookie_row.addWidget(all_button)
+        layout.addLayout(cookie_row)
+
+        cache_button = QPushButton("Borrar caché HTTP")
+        cache_button.clicked.connect(self._clear_cache)
+        layout.addWidget(cache_button)
+
+        storage_label = QLabel(
+            f"Datos persistentes: <code>{self.profile.persistentStoragePath()}</code><br>"
+            f"Caché: <code>{self.profile.cachePath()}</code>"
+        )
+        storage_label.setTextFormat(Qt.TextFormat.RichText)
+        storage_label.setWordWrap(True)
+        layout.addWidget(storage_label)
+
+        # -- Certificados ----------------------------------------------------
+        cert_title = QLabel("Certificados y seguridad")
+        cert_title.setObjectName("PanelTitle")
+        layout.addWidget(cert_title)
+        cert = QLabel(cert_info or "No se han registrado errores de certificado recientes para este sitio.")
+        cert.setWordWrap(True)
+        layout.addWidget(cert)
+
+        layout.addStretch(1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+        layout.addWidget(buttons)
+
+    @staticmethod
+    def _permission_name(kind) -> str:
+        names = {
+            "Geolocation": "Ubicación",
+            "MediaAudioCapture": "Micrófono",
+            "MediaVideoCapture": "Cámara",
+            "MediaAudioVideoCapture": "Cámara y micrófono",
+            "DesktopVideoCapture": "Captura de pantalla",
+            "DesktopAudioVideoCapture": "Captura de pantalla y audio",
+            "Notifications": "Notificaciones",
+            "MouseLock": "Bloqueo del ratón",
+            "ClipboardReadWrite": "Portapapeles",
+            "LocalFontsAccess": "Fuentes locales",
+        }
+        key = getattr(kind, "name", str(kind))
+        return names.get(key, key)
+
+    @staticmethod
+    def _state_name(state) -> str:
+        names = {
+            "Ask": "Preguntar",
+            "Granted": "Permitido",
+            "Denied": "Denegado",
+            "Invalid": "No válido",
+        }
+        key = getattr(state, "name", str(state))
+        return names.get(key, key)
+
+    def _apply_permission(self, action, label: QLabel) -> None:
+        try:
+            action()
+        except Exception as exc:
+            QMessageBox.warning(self, "Permisos", f"No se pudo cambiar el permiso: {exc}")
+            return
+        # El estado de QWebEnginePermission es inmutable; volver a consultar el
+        # perfil es la única forma fiable de reflejar el cambio.
+        del label
+        self._refresh_permissions()
+
+    def _refresh_permissions(self) -> None:
+        try:
+            permissions = list(self.profile.listPermissionsForOrigin(QUrl(self.url)))
+        except Exception:
+            return
+        for permission, label in self.perm_rows:
+            for fresh in permissions:
+                if (
+                    fresh.origin() == permission.origin()
+                    and fresh.permissionType() == permission.permissionType()
+                ):
+                    label.setText(self._state_name(fresh.state()))
+                    break
+
+    def _toggle_javascript(self, checked: bool) -> None:
+        self.settings.set("javascript", bool(checked))
+
+    def _delete_session_cookies(self) -> None:
+        self.profile.cookieStore().deleteSessionCookies()
+        QMessageBox.information(self, "Cookies", "Se han borrado las cookies de sesión.")
+
+    def _delete_all_cookies(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Cookies",
+            "¿Borrar todas las cookies de todos los sitios?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.profile.cookieStore().deleteAllCookies()
+            QMessageBox.information(self, "Cookies", "Se han borrado todas las cookies.")
+
+    def _clear_cache(self) -> None:
+        self.profile.clearHttpCache()
+        QMessageBox.information(self, "Caché", "Se ha borrado la caché HTTP.")

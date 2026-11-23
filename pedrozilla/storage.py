@@ -38,11 +38,22 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "download_dir": "",
     "ask_download_dir": False,
     "show_bookmarks_bar": True,
-    "theme": "classic",  # classic | dark | light
+    "theme": "modern",  # modern | classic | dark | light
+    "accent": "#ff7a32",  # color de identidad Pedrozilla
+    "newtab_prefs": {},  # preferencias de la página de nueva pestaña
+    "workspaces": {},  # espacios de trabajo: nombre, color, pestañas y grupos
+    "active_workspace": "personal",
+    "reader_font_size": 19,
+    "reader_width": 720,
     "default_zoom": 1.0,
     "user_agent": "",
     "javascript": True,
     "ignore_certificate_errors": False,
+    "privacy_dns_prefetch": False,
+    "privacy_hyperlink_auditing": False,
+    "privacy_insecure_geolocation": False,
+    "privacy_local_remote_urls": False,
+    "privacy_referrer_policy": "strict-origin-when-cross-origin",
     "check_updates": True,
     "last_update_check": 0,
     "last_update_prompt": "",
@@ -455,7 +466,7 @@ class Session(QObject):
         super().__init__(parent)
         self._file = _JsonFile(
             data_dir() / "session.json",
-            {"tabs": [], "active": 0, "geometry": None, "maximized": False},
+            {"tabs": [], "active": 0, "geometry": None, "maximized": False, "groups": {}},
         )
 
     @property
@@ -468,12 +479,14 @@ class Session(QObject):
         active: int,
         geometry: bytes | None,
         maximized: bool,
+        groups: dict | None = None,
     ) -> None:
         self._file.data = {
             "tabs": tabs,
             "active": active,
             "geometry": geometry.decode("latin-1") if geometry else None,
             "maximized": maximized,
+            "groups": groups or {},
         }
         self._file.save()
 

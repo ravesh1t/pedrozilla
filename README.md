@@ -3,7 +3,18 @@
 > **1.1.2** — navegador de escritorio basado en Chromium (Qt WebEngine).
 
 Slop pura y dura que come RAM todo el día: Chromium metido en Python (PySide6),
-con interfaz clásica tipo Firefox 7. Sin cuentas ni sincronización.
+con interfaz moderna y personalizable. Incluye los temas **Moderno**
+(predeterminado en nuevas instalaciones), Clásico tipo Firefox 7, Oscuro y
+Claro. Sin cuentas ni sincronización.
+
+Esta revisión añade la nueva pestaña de tablero (notas, recordatorios y enlaces),
+grupos de pestañas, espacios de trabajo, vista dividida, modo lectura, centro de
+privacidad y un diálogo de ajustes con barra lateral y buscador, sin cambiar el
+motor ni la versión del navegador. La barra de menús clásica ya no se muestra: la barra de
+pestañas es lo primero que aparece y todas sus acciones están en el menú del
+botón naranja, organizado en ARCHIVO, EDITAR, VER, HISTORIAL, MARCADORES,
+DESCARGAS, HERRAMIENTAS y AYUDA, con iconos SVG en línea, atajos a la derecha y
+un fundido sutil al abrirse. Los atajos siguen funcionando igual.
 
 ## Requisitos
 
@@ -39,6 +50,41 @@ pedrozilla\run.bat --debug                     :: muestra la consola JavaScript
 En ambos casos también vale `python -m pedrozilla <URL>` desde la carpeta que
 contiene al paquete. Arranca con `Ctrl+Shift+I` para las herramientas de
 desarrollo.
+
+## Funciones nuevas
+
+- **Nueva pestaña (tablero):** reloj, fecha, saludo y buscador sobre un fondo de
+  paisaje, con tarjetas de NOTAS, RECORDATORIOS, BUILD y DAILY. Permite añadir,
+  marcar y eliminar elementos, crear secciones propias, deshacer/rehacer y
+  filtrar enlaces. Los accesos y páginas recientes del perfil se usan como
+  contenido inicial; los cambios se guardan en `settings.json` mediante
+  QWebChannel. El buscador usa el motor configurado y navega en la misma
+  pestaña. Los espacios de trabajo se muestran arriba y se cambian desde el
+  menú naranja.
+- **Pestañas:** fijar, silenciar, agrupar por colores, contraer grupos, dividir
+  la pestaña en dos vistas independientes y recuperar pestañas cerradas desde
+  el historial.
+- **Espacios de trabajo:** cada espacio conserva sus pestañas, grupos y color.
+  Se cambia desde el menú *Espacios* o con `Alt+W`.
+- **Modo lectura (`F9`):** extrae el contenido principal de la página con
+  heurísticas locales, sin servicios externos. `Esc` lo cierra.
+- **Centro de privacidad:** permisos del sitio, control de JavaScript, cookies,
+  caché y certificados, usando las APIs reales de Qt WebEngine.
+- **Ajustes rediseñados:** 11 categorías en barra lateral, buscador y
+  restauración de valores por defecto.
+
+### Atajos añadidos
+
+| Atajo | Acción |
+| --- | --- |
+| `F9` | Modo lectura |
+| `Alt+V` | Dividir / unir la vista |
+| `Alt+P` | Fijar o desfijar la pestaña |
+| `Alt+M` | Silenciar la pestaña |
+| `Alt+G` | Crear grupo de pestañas |
+| `Alt+Shift+G` | Gestionar grupos |
+| `Alt+W` | Cambiar de espacio de trabajo |
+| `Ctrl+L` / `Alt+D` | Ir a la barra de direcciones |
 
 ## Instalarlo en el escritorio
 
@@ -79,8 +125,8 @@ El `.tar.gz` se instala sin root con `./install.sh`; el `.deb` instala en
 Pedrozilla consulta una vez al día la última release publicada en
 [GitHub](https://github.com/ravesh1t/pedrozilla/releases) y avisa si hay una
 versión nueva. No envía telemetría ni descarga nada por su cuenta. También
-puedes comprobarlo a mano en *Ayuda → Buscar actualizaciones…* o desactivar la
-comprobación automática en *Ajustes → General*.
+puedes comprobarlo a mano en el menú naranja de Pedrozilla → *AYUDA → Buscar
+actualizaciones* o desactivar la comprobación automática en *Ajustes → General*.
 
 ## Estructura
 
@@ -94,12 +140,17 @@ pedrozilla/
 ├── dialogs.py           historial, marcadores, ajustes y "acerca de"
 ├── extensions.py        extensiones Chromium (MV3)
 ├── updates.py           comprobación de releases en GitHub
-├── newtab.py            HTML de la página de nueva pestaña
+├── newtab.py            datos inyectados en la página de nueva pestaña
+├── newtab_template.py   HTML del tablero (diseño adjuntado)
 ├── newtab_bridge.py     puente Qt ↔ JavaScript de esa página
-├── theme.py             temas clásico, oscuro y claro
+├── icons.py             iconos SVG en línea del menú principal
+├── reader.py            modo lectura y solicitud de PiP nativo
+├── theme.py             temas moderno, clásico, oscuro y claro
 ├── utils.py             parseo de la barra de direcciones y formateo
 ├── run.sh / run.bat     lanzadores
 └── instalar.sh/.bat/.ps1  accesos directos de escritorio
+tests/
+└── test_pedrozilla.py   pruebas unittest (nueva pestaña, GUI, ajustes, grupos…)
 ```
 
 `pedrozilla_launcher.py` es el punto de entrada que usa PyInstaller;
@@ -119,13 +170,39 @@ pedrozilla/
 - Perfil de Chromium: `~/.local/share/pedrozilla/`
 - Descargas: `~/Downloads` o la carpeta que elijas en Ajustes
 
-Todo se borra desde *Ajustes → Avanzado → Borrar datos de navegación* o
-borrando esas carpetas.
+Todo se borra desde *Ajustes → Privacidad y seguridad → Borrar datos de
+navegación* (o *Historial → Borrar datos de navegación*) o borrando esas
+carpetas. La política de referrer se aplica mediante una etiqueta `<meta>`
+local; Qt WebEngine no expone la cabecera HTTP ni Do Not Track.
+
+## Pruebas
+
+```bash
+QT_QPA_PLATFORM=offscreen python3 -m unittest discover -s tests -v
+```
+
+No instalan dependencias nuevas ni escriben en tu perfil real: usan un
+directorio temporal.
 
 ## Limitaciones conocidas
 
 - Sin sincronización ni cuentas; las extensiones MV3 son propias y no se
   importan los marcadores de Chrome.
+- **Picture in Picture:** Qt WebEngine no ofrece una API para controlar la
+  ventana flotante de Chromium. Pedrozilla solo puede pedir el PiP nativo desde
+  la página (`requestPictureInPicture`); no puede moverlo ni redimensionarlo.
+- **Favicons:** Qt WebEngine no expone una API para leer su base de favicons,
+  así que las iniciales con color se mantienen como icono de respaldo.
+- **Almacenamiento local:** no existe una API de Qt para enumerar `localStorage`
+  de todos los orígenes. Borrar datos limpia el de las pestañas abiertas y el
+  directorio `Local Storage` del perfil; puede ser necesario recargar.
+- **Sesión:** el archivo de sesión describe una sola ventana (la última normal
+  que queda abierta). Los espacios de trabajo se guardan aparte en los ajustes.
+- **Modo lectura:** es heurístico. Si la página no tiene suficiente texto
+  identificable, se informa y la página queda intacta.
+- **Menú desplegable:** el QSS de Qt no admite `box-shadow` ni una animación
+  fiable de cierre en menús modales; el tema Modern usa borde y esquinas
+  redondeadas para dar profundidad y un fundido sutil al abrir.
 - El menú contextual y las páginas internas son propios (no replican `chrome://`).
 - Para vídeo con códecs propietarios (H.264) puede hace falta la versión de Qt
   WebEngine del sistema en lugar de la de `pip`.
