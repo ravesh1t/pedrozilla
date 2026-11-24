@@ -698,11 +698,8 @@ class BrowserWindow(QMainWindow):
         self._downloads_button = self._toolbar_button(self.action_downloads)
         self.toolbar.addWidget(self._downloads_button)
 
-        self.action_menu = self._action(f"{BRAND} ▾", "Menú principal", self._show_main_menu)
+        self.action_menu = self._action("☰", "Menú principal", self._show_main_menu)
         self._menu_button = self._toolbar_button(self.action_menu)
-        self._menu_button.setObjectName("MenuButton")
-        self._menu_button.setAutoRaise(False)
-        self._menu_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.toolbar.addWidget(self._menu_button)
 
     def _action(self, text: str, tooltip: str, slot, shortcut: str | None = None) -> QAction:

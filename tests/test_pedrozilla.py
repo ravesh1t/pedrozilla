@@ -183,6 +183,8 @@ class GuiTests(unittest.TestCase):
         self.assertFalse(menu_icon("Nueva pestaña").isNull())
         self.assertFalse(self.window.menuBar().isVisible())
         self.assertEqual(self.window.menuBar().actions(), [])
+        self.assertEqual(self.window.action_menu.text(), "☰")
+        self.assertNotEqual(self.window._menu_button.objectName(), "MenuButton")
 
         menu = self.window._build_main_menu()
         self.assertEqual(menu.objectName(), "PedrozillaMainMenu")

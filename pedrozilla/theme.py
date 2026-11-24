@@ -1,7 +1,7 @@
 """Hojas de estilo de la interfaz (tema clasico, oscuro y claro).
 
 El tema `classic` imita el Firefox 7 de Windows: franja de pestanas arriba,
-barras con degradado gris claro, boton naranja del menu y caja de direcciones
+barras con degradado gris claro, menu sobrio y caja de direcciones
 clasica. No hay caja de busqueda aparte: se busca desde la propia omnibox.
 """
 
@@ -100,12 +100,6 @@ QLabel#MutedHint { color: #9aa0a6; }
 QFrame#DownloadsBar { background: #292a2d; border-top: 1px solid #3c4043; }
 QFrame#FindBar { background: #292a2d; border-top: 1px solid #3c4043; }
 QWidget#NewTabBadge { background: #303134; border-radius: 12px; }
-QToolButton#MenuButton {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ffb054, stop:0.5 #f7941e, stop:1 #e87b0b);
-    border: 1px solid #c96a09; border-radius: 3px; color: #ffffff; font-weight: 700; padding: 5px 14px;
-}
-QToolButton#MenuButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ffcd85, stop:0.5 #ffa631, stop:1 #ee8a12); }
-QToolButton#MenuButton:pressed { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #e08b1c, stop:1 #c96f08); }
 """
 
 LIGHT = """
@@ -122,12 +116,6 @@ QToolButton:checked { background: #1a73e8; color: #ffffff; }
 QToolButton:disabled { color: #bdc1c6; }
 QToolButton#BookmarkButton { border-radius: 4px; padding: 3px 8px; max-width: 190px; }
 QToolButton#BookmarkButton:hover { background: #e8eaed; }
-QToolButton#MenuButton {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ffb054, stop:0.5 #f7941e, stop:1 #e87b0b);
-    border: 1px solid #c96a09; border-radius: 3px; color: #ffffff; font-weight: 700; padding: 5px 14px;
-}
-QToolButton#MenuButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ffcd85, stop:0.5 #ffa631, stop:1 #ee8a12); }
-QToolButton#MenuButton:pressed { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #e08b1c, stop:1 #c96f08); }
 
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QComboBox {
     background: #f1f3f4; border: 1px solid #f1f3f4; border-radius: 15px; padding: 6px 12px;
@@ -250,14 +238,6 @@ QToolButton#BookmarkButton { border-radius: 3px; padding: 3px 8px; max-width: 19
 QToolButton#BookmarkButton:hover {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ffffff, stop:1 #e4e6ea);
     border: 1px solid #a8afb8; }
-QToolButton#MenuButton {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ffc06a, stop:0.5 #f7941e, stop:1 #e07b09);
-    border: 1px solid #b96a08; border-radius: 3px; color: #ffffff; font-weight: 700; padding: 5px 14px;
-}
-QToolButton#MenuButton:hover {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ffcd85, stop:0.5 #ffa631, stop:1 #ee8a12); }
-QToolButton#MenuButton:pressed {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #e08b1c, stop:1 #c96f08); }
 
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QComboBox {
     background: #ffffff; border: 1px solid #a0a0a0; border-radius: 3px; padding: 4px 8px;
@@ -328,7 +308,7 @@ QTabWidget#DialogTabs QTabBar::tab { min-width: 90px; border-radius: 4px; margin
 
 
 MODERN = """
-/* Pedrozilla Modern — gris carbón, blanco roto, azul suave y naranja de identidad. */
+/* Pedrozilla Modern — gris carbón, blanco roto y azul suave. */
 QWidget {
     background: #f6f5f2; color: #202327; font-size: 13px;
     font-family: "Segoe UI", "Inter", system-ui, -apple-system, sans-serif;
@@ -367,7 +347,7 @@ QToolBar {
 QToolBar#BookmarksBar { background: #f0eee9; border-bottom: 1px solid #dedbd4; padding: 3px 8px; }
 QToolBar::separator { background: #d9d6cf; width: 1px; margin: 5px 7px; }
 
-/* --- Botones de herramientas y menú naranja --- */
+/* --- Botones de herramientas y menú --- */
 QToolButton {
     background: transparent; border: 1px solid transparent; border-radius: 8px;
     padding: 6px 9px; color: #3c4043;
@@ -378,12 +358,6 @@ QToolButton:checked { background: #e3ecf8; border-color: #b9d2ee; color: #1f4e86
 QToolButton:disabled { color: #a5a29c; }
 QToolButton#BookmarkButton { border-radius: 8px; padding: 4px 10px; max-width: 190px; }
 QToolButton#BookmarkButton:hover { background: #e9e7e2; border-color: #d9d6cf; }
-QToolButton#MenuButton {
-    background: #ef8b28; border: 1px solid #d97a17; border-radius: 8px;
-    color: #ffffff; font-weight: 600; padding: 6px 16px;
-}
-QToolButton#MenuButton:hover { background: #f79b3f; border-color: #e2841b; }
-QToolButton#MenuButton:pressed { background: #dd7d12; }
 
 /* --- Omnibox y campos --- */
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {
