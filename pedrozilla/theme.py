@@ -356,6 +356,12 @@ QToolButton:hover { background: #e9e7e2; border-color: #d9d6cf; }
 QToolButton:pressed { background: #dedbd4; }
 QToolButton:checked { background: #e3ecf8; border-color: #b9d2ee; color: #1f4e86; }
 QToolButton:disabled { color: #a5a29c; }
+QToolButton#MenuButton {
+    background: #ffffff; border: 1px solid #d9d6cf; border-radius: 10px;
+    padding: 7px 14px; min-width: 48px; min-height: 38px; color: #1f4e86;
+}
+QToolButton#MenuButton:hover { background: #e9e7e2; border-color: #b9d2ee; }
+QToolButton#MenuButton:pressed { background: #d8e5f5; }
 QToolButton#BookmarkButton { border-radius: 8px; padding: 4px 10px; max-width: 190px; }
 QToolButton#BookmarkButton:hover { background: #e9e7e2; border-color: #d9d6cf; }
 
@@ -395,7 +401,7 @@ QMenu {
     background: #ffffff; border: 1px solid #d9d6cf; border-radius: 10px;
     padding: 7px;
 }
-QMenu#PedrozillaMainMenu { min-width: 288px; max-height: 580px; padding: 0; }
+QMenu#PedrozillaMainMenu { min-width: 366px; max-height: 580px; padding: 0; }
 QMenu#PedrozillaMainMenu::item { padding: 0; }
 QMenu::item { padding: 7px 26px 7px 34px; border-radius: 6px; }
 QMenu::item:selected { background: #e3ecf8; color: #1f4e86; }

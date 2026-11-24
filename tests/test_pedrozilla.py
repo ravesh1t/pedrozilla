@@ -184,10 +184,13 @@ class GuiTests(unittest.TestCase):
         self.assertFalse(self.window.menuBar().isVisible())
         self.assertEqual(self.window.menuBar().actions(), [])
         self.assertEqual(self.window.action_menu.text(), "☰")
-        self.assertNotEqual(self.window._menu_button.objectName(), "MenuButton")
+        self.assertEqual(self.window._menu_button.objectName(), "MenuButton")
+        self.assertGreaterEqual(self.window._menu_button.minimumWidth(), 48)
+        self.assertGreaterEqual(self.window._menu_button.minimumHeight(), 38)
 
         menu = self.window._build_main_menu()
         self.assertEqual(menu.objectName(), "PedrozillaMainMenu")
+        self.assertGreaterEqual(menu.sizeHint().width(), 366)
         self.assertLessEqual(menu.tree.maximumHeight(), 560)
         self.assertGreater(menu.tree.verticalScrollBar().maximum(), 0)
 

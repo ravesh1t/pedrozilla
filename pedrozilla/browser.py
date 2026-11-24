@@ -701,6 +701,13 @@ class BrowserWindow(QMainWindow):
 
         self.action_menu = self._action("☰", "Menú principal", self._show_main_menu)
         self._menu_button = self._toolbar_button(self.action_menu)
+        self._menu_button.setObjectName("MenuButton")
+        self._menu_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self._menu_button.setMinimumSize(QSize(48, 38))
+        font = self._menu_button.font()
+        font.setPointSize(font.pointSize() + 5)
+        font.setBold(True)
+        self._menu_button.setFont(font)
         self.toolbar.addWidget(self._menu_button)
 
     def _action(self, text: str, tooltip: str, slot, shortcut: str | None = None) -> QAction:

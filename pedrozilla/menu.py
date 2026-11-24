@@ -79,8 +79,9 @@ class ScrollableMenu(QMenu):
         tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         tree.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         tree.setMouseTracking(True)
-        tree.setColumnWidth(0, 216)
-        tree.setColumnWidth(1, 72)
+        tree.setColumnWidth(0, 270)
+        tree.setColumnWidth(1, 90)
+        tree.setMinimumWidth(372)
 
         screen = QApplication.primaryScreen()
         available = screen.availableGeometry().height() if screen else 900
@@ -107,6 +108,7 @@ class ScrollableMenu(QMenu):
             f"""
             QTreeWidget#PedrozillaMenuList {{
                 background: {window}; color: {text}; border: 0; outline: 0;
+                font-size: 14px;
             }}
             QTreeWidget#PedrozillaMenuList::item {{
                 padding: 4px 6px; border-radius: 6px;
@@ -153,12 +155,12 @@ class ScrollableMenu(QMenu):
             font = item.font(0)
             font.setBold(True)
             item.setFont(0, font)
-            item.setSizeHint(0, QSize(10, 28))
+            item.setSizeHint(0, QSize(10, 32))
             item.setData(0, ENTRY_ROLE, "section")
             return
 
         item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-        item.setSizeHint(0, QSize(10, 30))
+        item.setSizeHint(0, QSize(10, 34))
         if entry.action is not None:
             item.setText(0, entry.text)
             item.setIcon(0, entry.action.icon())
