@@ -188,12 +188,12 @@ class GuiTests(unittest.TestCase):
 
         menu = self.window._build_main_menu()
         self.assertEqual(menu.objectName(), "PedrozillaMainMenu")
+        self.assertLessEqual(menu.tree.maximumHeight(), 560)
+        self.assertGreater(menu.tree.verticalScrollBar().maximum(), 0)
 
-        sections = [
-            action.text()
-            for action in menu.actions()
-            if action.isSeparator() and action.text()
-        ]
+        entries = self.window._main_menu_entries()
+        self.assertEqual(menu.tree.topLevelItemCount(), len(entries))
+        sections = [entry.text for entry in entries if entry.kind == "section"]
         self.assertEqual(
             sections,
             [
@@ -207,7 +207,8 @@ class GuiTests(unittest.TestCase):
                 "AYUDA",
             ],
         )
-        labels = [self.window._action_key(action.text()) for action in menu.actions()]
+        actions = [entry.action for entry in entries if entry.kind == "action"]
+        labels = [self.window._action_key(entry.text) for entry in entries]
         for expected in (
             "Nueva pestaña",
             "Recargar sin caché",
@@ -218,26 +219,10 @@ class GuiTests(unittest.TestCase):
             "Acerca de Pedrozilla",
         ):
             self.assertIn(expected, labels)
-        self.assertTrue(
-            all(action.isEnabled() for action in menu.actions() if not action.isSeparator())
-        )
-        self.assertTrue(
-            all(
-                not action.icon().isNull()
-                for action in menu.actions()
-                if not action.isSeparator()
-            )
-        )
-
-        # La acción del menú es la misma QAction (mismo atajo y misma señal).
-        shortcut_action = next(
-            action
-            for action in self.window.findChildren(QAction)
-            if action.shortcut().toString() == "Ctrl+T"
-        )
-        self.assertIs(
-            shortcut_action, self.window._reused_action("Archivo", "Nueva pestaña")
-        )
+        self.assertTrue(all(action is not None and action.isEnabled() for action in actions))
+        self.assertTrue(all(not action.icon().isNull() for action in actions))
+        self.assertIn("Ctrl+T", [action.shortcut().toString() for action in actions])
+        self.assertTrue(any(entry.kind == "submenu" for entry in entries))
 
     def test_workspaces_switch(self) -> None:
         # Instantáneas explícitas y un espacio "scratch": el resultado no

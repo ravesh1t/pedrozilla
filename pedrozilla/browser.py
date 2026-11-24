@@ -73,6 +73,7 @@ from .reader import picture_in_picture_script, reader_script
 from .downloads import DownloadRow, DownloadsDialog, DownloadsManager
 from .extensions import ExtensionBridge, ExtensionsDialog, extension_manager
 from .icons import menu_icon
+from .menu import MenuEntry, ScrollableMenu
 from .newtab import new_tab_html
 from .newtab_bridge import NewTabBridge
 from .storage import (
@@ -2336,90 +2337,108 @@ class BrowserWindow(QMainWindow):
         """Muestra el menú del botón naranja."""
         self._exec_main_menu(self._build_main_menu())
 
-    def _build_main_menu(self) -> QMenu:
-        """Construye el menú reutilizando las QAction de la barra oculta."""
-        menu = QMenu(self)
-        menu.setObjectName("PedrozillaMainMenu")
-        icon = menu_icon
+    def _main_menu_entries(self) -> list[MenuEntry]:
+        """Entradas del menú, reutilizando las QAction de la barra oculta."""
+        entries: list[MenuEntry] = []
 
-        def add(section: str, text: str, glyph: str) -> QAction:
-            return self._add_reused(menu, section, text, glyph)
+        def add(section: str, text: str, _glyph: str | None = None) -> None:
+            action = self._reused_action(section, text)
+            action.setIcon(menu_icon(text))
+            # Registrar la acción en la ventana también mantiene vivos sus
+            # atajos aunque el menú esté cerrado.
+            if action not in self.actions():
+                self.addAction(action)
+            entries.append(MenuEntry("action", text, action=action))
 
-        menu.addSection("ARCHIVO")
+        def section(title: str) -> None:
+            entries.append(MenuEntry("section", title))
+
+        def separator() -> None:
+            entries.append(MenuEntry("separator"))
+
+        def submenu(title: str, menu: QMenu) -> None:
+            menu.menuAction().setIcon(menu_icon(title))
+            entries.append(MenuEntry("submenu", title, submenu=menu))
+
+        section("ARCHIVO")
         add("Archivo", "Nueva pestaña", "SP_FileIcon")
         add("Archivo", "Nueva ventana", "SP_FileDialogNewFolder")
         add("Archivo", "Nueva ventana privada", "SP_ComputerIcon")
-        menu.addSeparator()
+        separator()
         add("Archivo", "Abrir archivo local", "SP_DialogOpenButton")
         add("Archivo", "Guardar página como", "SP_DialogSaveButton")
         add("Archivo", "Guardar como PDF", "SP_DialogSaveButton")
         add("Archivo", "Imprimir", "SP_DialogPrintButton")
-        menu.addSeparator()
+        separator()
         add("Archivo", "Cerrar pestaña", "SP_DialogCloseButton")
         add("Archivo", "Salir", "SP_DialogCloseButton")
 
-        menu.addSection("EDITAR")
+        section("EDITAR")
         add("Editar", "Deshacer", "SP_ArrowBack")
         add("Editar", "Rehacer", "SP_ArrowForward")
-        menu.addSeparator()
+        separator()
         add("Editar", "Cortar", "SP_DialogDiscardButton")
         add("Editar", "Copiar", "SP_FileIcon")
         add("Editar", "Pegar", "SP_DialogApplyButton")
         add("Editar", "Seleccionar todo", "SP_FileDialogContentsView")
-        menu.addSeparator()
+        separator()
         add("Editar", "Buscar en la página", "SP_FileDialogInfoView")
 
-        menu.addSection("VER")
+        section("VER")
         add("Ver", "Recargar", "SP_BrowserReload")
         add("Ver", "Recargar sin caché", "SP_BrowserReload")
         add("Ver", "Detener", "SP_BrowserStop")
-        zoom = menu.addMenu(icon("Zoom"), "Zoom")
+        zoom = QMenu("Zoom", self)
         self._add_reused(zoom, "Ver", "Aumentar zoom", "SP_ArrowUp")
         self._add_reused(zoom, "Ver", "Reducir zoom", "SP_ArrowDown")
         self._add_reused(zoom, "Ver", "Zoom original", "SP_DialogResetButton")
+        submenu("Zoom", zoom)
         add("Ver", "Pantalla completa", "SP_TitleBarMaxButton")
         add("Ver", "Barra de marcadores", "SP_DialogResetButton")
         add("Ver", "Ver código fuente", "SP_FileDialogContentsView")
         add("Ver", "DevTools", "SP_FileDialogDetailedView")
-        more = menu.addMenu(icon("Más"), "Más")
+        more = QMenu("Más", self)
         self._add_reused(more, "Ver", "Modo lectura", "SP_FileIcon")
         self._add_reused(more, "Ver", "Vista dividida", "SP_FileDialogDetailedView")
         self._add_reused(more, "Ver", "Vídeo en ventana flotante (PiP)", "SP_MessageBoxInformation")
+        submenu("Más", more)
 
-        menu.addSection("HISTORIAL")
+        section("HISTORIAL")
         add("Historial", "Ver historial", "SP_ArrowBack")
         add("Historial", "Reabrir pestaña cerrada", "SP_FileDialogNewFolder")
-        navigation = menu.addMenu(icon("Navegación"), "Navegación")
+        navigation = QMenu("Navegación", self)
         self._add_reused(navigation, "Historial", "Atrás", "SP_ArrowBack")
         self._add_reused(navigation, "Historial", "Adelante", "SP_ArrowForward")
         self._add_reused(navigation, "Historial", "Página de inicio", "SP_DirHomeIcon")
-        self.closed_menu.menuAction().setIcon(icon("Pestañas cerradas recientemente"))
-        menu.addMenu(self.closed_menu)
+        submenu("Navegación", navigation)
+        submenu("Pestañas cerradas recientemente", self.closed_menu)
         add("Historial", "Borrar datos de navegación", "SP_DialogDiscardButton")
 
-        menu.addSection("MARCADORES")
+        section("MARCADORES")
         add("Marcadores", "Añadir marcador", "SP_FileIcon")
         add("Marcadores", "Administrar marcadores", "SP_DirIcon")
         add("Marcadores", "Barra de marcadores", "SP_DialogResetButton")
 
-        menu.addSection("DESCARGAS")
+        section("DESCARGAS")
         add("Descargas", "Abrir gestor de descargas", "SP_DialogSaveButton")
         add("Descargas", "Abrir carpeta de descargas", "SP_DirOpenIcon")
 
-        menu.addSection("HERRAMIENTAS")
-        workspaces = self._workspace_menu()
-        workspaces.menuAction().setIcon(icon("Espacios de trabajo"))
-        menu.addMenu(workspaces)
+        section("HERRAMIENTAS")
+        submenu("Espacios de trabajo", self._workspace_menu())
         add("Atajos", "Gestionar grupos", "SP_FileDialogDetailedView")
         add("Ajustes", "Extensiones", "SP_FileDialogContentsView")
         add("Ajustes", "Ajustes", "SP_ComputerIcon")
         add("Ajustes", "Privacidad y seguridad", "SP_MessageBoxInformation")
 
-        menu.addSection("AYUDA")
+        section("AYUDA")
         add("Ayuda", "Buscar actualizaciones", "SP_MessageBoxInformation")
         add("Ayuda", f"Acerca de {BRAND}", "SP_MessageBoxQuestion")
 
-        return menu
+        return entries
+
+    def _build_main_menu(self) -> QMenu:
+        """Menú compacto con scroll: caben todas las opciones sin gigantear."""
+        return ScrollableMenu(self._main_menu_entries(), self)
 
     def _show_tab_menu(self, pos) -> None:
         bar = self.tabs.tabBar()

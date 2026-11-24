@@ -395,7 +395,8 @@ QMenu {
     background: #ffffff; border: 1px solid #d9d6cf; border-radius: 10px;
     padding: 7px;
 }
-QMenu#PedrozillaMainMenu { min-width: 230px; padding: 8px; }
+QMenu#PedrozillaMainMenu { min-width: 288px; max-height: 580px; padding: 0; }
+QMenu#PedrozillaMainMenu::item { padding: 0; }
 QMenu::item { padding: 7px 26px 7px 34px; border-radius: 6px; }
 QMenu::item:selected { background: #e3ecf8; color: #1f4e86; }
 QMenu::item:disabled { color: #a5a29c; }
